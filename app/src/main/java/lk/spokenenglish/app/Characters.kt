@@ -55,10 +55,12 @@ object Characters {
         {"mood": "happy" | "surprised" | "sad" | "annoyed" | "thinking" | "neutral", "laugh": true | false, "reply": "what you say",
          "coach": null | {"si": "...", "en": "...", "sentence": "..."},
          "better": null | {"said": "his words with the mistake", "wrong": "the wrong word(s)", "right": "the right word(s)",
-                           "sentence": "his sentence said correctly", "why": "one short simple reason"},
-         "lines": [{"t": "one sentence or short phrase of your reply", "tone": "excited" | "surprised" | "question" | "curious" | "warm" | "calm" | "sad" | "annoyed" | "neutral"}]}
-        "lines" is your reply split into its sentences, in order, with nothing added or left out; put a short
-        reaction like "Oh!" or "No way!" as its own line. Choose each tone as a real person would say it.
+                           "sentence": "his sentence said correctly", "why": "one short simple reason"}}
+        In "reply", put a short tone mark in square brackets before EACH sentence, showing how a real person would
+        say it: [excited] [surprised] [question] [curious] [warm] [calm] [sad] [annoyed] or [neutral].
+        Put a short reaction like "Oh!" or "No way!" as its own sentence with its own mark.
+        Example: "[surprised] No way! [excited] I loved that film too. [curious] Who's your favourite character?"
+        Use the marks only in "reply", nowhere else.
     """.trimIndent()
 
     val SAM = Character(

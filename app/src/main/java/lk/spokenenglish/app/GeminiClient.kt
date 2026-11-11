@@ -19,7 +19,7 @@ class GeminiClient(private val key: String, private val model: String) {
         /** A grammar correction ("Better English" card), or empty. */
         val betterSaid: String = "", val betterWrong: String = "", val betterRight: String = "",
         val betterSentence: String = "", val betterWhy: String = "",
-        /** The reply split into sentences, each with a tone, for the expressive voice. */
+        /** The reply split into sentences, each with a tone (from the [tone] marks), for the expressive voice. */
         val lines: List<Line> = emptyList()
     )
 
@@ -66,7 +66,7 @@ class GeminiClient(private val key: String, private val model: String) {
             .removeSuffix("```").trim()
         return try {
             val j = JSONObject(clean)
-            val said = j.optString("reply", clean)
+            val (said, lines) = readMarks(j.optString("reply", clean))
             val coach = j.optJSONObject("coach")
             val better = j.optJSONObject("better")
             fun b(k: String) = better?.optString(k, "")?.trim().orEmpty()
@@ -79,22 +79,32 @@ class GeminiClient(private val key: String, private val model: String) {
                 coach?.optString("en", "")?.trim().orEmpty(),
                 coach?.optString("sentence", "")?.trim().orEmpty(),
                 b("said"), b("wrong"), b("right"), b("sentence"), b("why"),
-                parseLines(j.optJSONArray("lines"))
+                lines
             )
         } catch (e: Exception) {
-            Reply("neutral", stripSounds(clean), hasSounds(clean), ms, version)
+            val (said, lines) = readMarks(clean)
+            Reply("neutral", stripSounds(said), hasSounds(said), ms, version, lines = lines)
         }
     }
 
-    private fun parseLines(arr: JSONArray?): List<Line> {
-        if (arr == null) return emptyList()
-        val out = mutableListOf<Line>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val t = stripSounds(o.optString("t", ""))
-            if (t.isNotBlank()) out.add(Line(t, o.optString("tone", "neutral")))
+    /**
+     * "[surprised] No way! [excited] I loved it." → the text without marks, and one Line per marked part.
+     * Text without marks gives no lines (the voice then uses the punctuation).
+     */
+    private fun readMarks(reply: String): Pair<String, List<Line>> {
+        val mark = Regex("\\[([a-zA-Z]+)\\]\\s*")
+        val found = mark.findAll(reply).toList()
+        val plain = reply.replace(mark, "").replace(Regex("\\s{2,}"), " ").trim()
+        if (found.isEmpty()) return plain to emptyList()
+        val lines = mutableListOf<Line>()
+        val lead = reply.substring(0, found[0].range.first).trim()
+        if (lead.isNotEmpty()) lines.add(Line(stripSounds(lead), "neutral"))
+        found.forEachIndexed { i, m ->
+            val end = if (i + 1 < found.size) found[i + 1].range.first else reply.length
+            val t = stripSounds(reply.substring(m.range.last + 1, end).trim())
+            if (t.isNotEmpty()) lines.add(Line(t, m.groupValues[1].lowercase()))
         }
-        return out
+        return plain to lines
     }
 
     /** Returns (reply text, modelVersion). */
