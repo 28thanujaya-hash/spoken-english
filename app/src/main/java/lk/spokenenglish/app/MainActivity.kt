@@ -169,6 +169,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             if (!ok) addNote("The phone's Google voice isn't ready. Check Settings › Text-to-speech › Google.")
             startChat()
         }
+        voice.expressive = prefs.getBoolean("expressive", true)
         voice.onSpeaking = { talking ->
             partnerTalking = talking
             face.talking = talking
@@ -512,12 +513,12 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                     if (!nudge) silenceStage = 0
                     face.mood = r.mood
                     if (!inTurn) setSinhala(false)   // every new turn starts in English
-                    addPartnerBubble(r.text, r.ms)
+                    addPartnerBubble(r.text, r.ms, r.lines)
                     val coached = r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())
                     if (coached) addCoachCard(r)
                     val level = grammarLevel()
                     if (level >= 2 && r.betterSentence.isNotBlank()) addBetterCard(r, askTry = level >= 3 && !coached)
-                    if (r.laugh) laughThenSpeak(r.text) else voice.speak(r.text, partner)
+                    if (r.laugh) laughThenSpeak(r.text, r.lines) else voice.speak(r.text, partner, r.lines)
                 }.onFailure { e ->
                     if (history.isNotEmpty()) history.removeAt(history.size - 1)
                     face.mood = "neutral"
@@ -579,7 +580,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     // ---- laughs: a real laugh sound and a laughing face, then the voice ----
 
-    private fun laughThenSpeak(text: String) {
+    private fun laughThenSpeak(text: String, lines: List<Line> = emptyList()) {
         val who = partner
         laughing = true
         face.laughing = true
@@ -589,7 +590,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             laughing = false
             face.laughing = false
             stopLaughPlayer()
-            if (who == partner && !inTurn) voice.speak(text, who)
+            if (who == partner && !inTurn) voice.speak(text, who, lines)
         }
         val clip = who.laughClip
         if (clip != null) {
@@ -727,6 +728,11 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         box.addView(label("Grammar level 1–4 (empty = by day: today is day ${courseDay()}, level ${levelForDay(courseDay())})", 13f, muted))
         box.addView(levelInput)
+        val expressiveBox = android.widget.CheckBox(this).apply {
+            text = "Expressive voice (tone per sentence)"
+            isChecked = prefs.getBoolean("expressive", true)
+        }
+        box.addView(expressiveBox)
         box.addView(label("Gemini key (empty = the one built into the app)", 13f, muted))
         box.addView(keyInput)
         box.addView(label("Model (empty = $DEFAULT_MODEL; backup = $BACKUP_MODEL)", 13f, muted))
@@ -749,9 +755,11 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             .setTitle("Test settings")
             .setView(box)
             .setPositiveButton("Save") { _, _ ->
+                voice.expressive = expressiveBox.isChecked
                 prefs.edit()
                     .putString("key", keyInput.text.toString().trim())
                     .putString("model", modelInput.text.toString().trim())
+                    .putBoolean("expressive", expressiveBox.isChecked)
                     .putInt("grammarLevel", levelInput.text.toString().trim().toIntOrNull()?.takeIf { it in 1..4 } ?: 0)
                     .apply()
             }
@@ -1196,7 +1204,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     }
 
     /** Partner speech is voice only; the words appear only if he taps "Show words". */
-    private fun addPartnerBubble(text: String, ms: Long?) {
+    private fun addPartnerBubble(text: String, ms: Long?, lines: List<Line> = emptyList()) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(Color.WHITE, dp(16), line)
@@ -1207,7 +1215,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             gravity = Gravity.CENTER_VERTICAL
         }
         val who = partner
-        row.addView(smallButton("▶  ${who.name}") { if (!inTurn) { stopLaugh(); voice.speak(text, who) } })
+        row.addView(smallButton("▶  ${who.name}") { if (!inTurn) { stopLaugh(); voice.speak(text, who, lines) } })
         if (ms != null) row.addView(label("  reply in %.1f s".format(ms / 1000f), 12f, muted))
         card.addView(row)
         val words = label(text, 15f, ink).apply { visibility = View.GONE }

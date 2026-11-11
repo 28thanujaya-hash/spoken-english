@@ -55,7 +55,10 @@ object Characters {
         {"mood": "happy" | "surprised" | "sad" | "annoyed" | "thinking" | "neutral", "laugh": true | false, "reply": "what you say",
          "coach": null | {"si": "...", "en": "...", "sentence": "..."},
          "better": null | {"said": "his words with the mistake", "wrong": "the wrong word(s)", "right": "the right word(s)",
-                           "sentence": "his sentence said correctly", "why": "one short simple reason"}}
+                           "sentence": "his sentence said correctly", "why": "one short simple reason"},
+         "lines": [{"t": "one sentence or short phrase of your reply", "tone": "excited" | "surprised" | "question" | "curious" | "warm" | "calm" | "sad" | "annoyed" | "neutral"}]}
+        "lines" is your reply split into its sentences, in order, with nothing added or left out; put a short
+        reaction like "Oh!" or "No way!" as its own line. Choose each tone as a real person would say it.
     """.trimIndent()
 
     val SAM = Character(

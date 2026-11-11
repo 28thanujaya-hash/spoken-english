@@ -18,7 +18,9 @@ class GeminiClient(private val key: String, private val model: String) {
         val coachSi: String = "", val coachEn: String = "", val coachSentence: String = "",
         /** A grammar correction ("Better English" card), or empty. */
         val betterSaid: String = "", val betterWrong: String = "", val betterRight: String = "",
-        val betterSentence: String = "", val betterWhy: String = ""
+        val betterSentence: String = "", val betterWhy: String = "",
+        /** The reply split into sentences, each with a tone, for the expressive voice. */
+        val lines: List<Line> = emptyList()
     )
 
     class HttpError(val code: Int, message: String, val body: String = "") : Exception(message) {
@@ -76,11 +78,23 @@ class GeminiClient(private val key: String, private val model: String) {
                 coach?.optString("si", "")?.trim().orEmpty(),
                 coach?.optString("en", "")?.trim().orEmpty(),
                 coach?.optString("sentence", "")?.trim().orEmpty(),
-                b("said"), b("wrong"), b("right"), b("sentence"), b("why")
+                b("said"), b("wrong"), b("right"), b("sentence"), b("why"),
+                parseLines(j.optJSONArray("lines"))
             )
         } catch (e: Exception) {
             Reply("neutral", stripSounds(clean), hasSounds(clean), ms, version)
         }
+    }
+
+    private fun parseLines(arr: JSONArray?): List<Line> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<Line>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val t = stripSounds(o.optString("t", ""))
+            if (t.isNotBlank()) out.add(Line(t, o.optString("tone", "neutral")))
+        }
+        return out
     }
 
     /** Returns (reply text, modelVersion). */
