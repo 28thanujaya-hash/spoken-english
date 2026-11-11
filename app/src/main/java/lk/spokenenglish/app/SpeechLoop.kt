@@ -1,11 +1,13 @@
 package lk.spokenenglish.app
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
@@ -36,6 +38,10 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
     private var wantSinhala = false
     private var segmentSinhala = false
     private var problemShown = false
+
+    /** Languages for which "prefer offline" failed; for those we let Google use the internet. */
+    private val onlineOnly = mutableSetOf<String>()
+    private var segmentLang = "en-US"
 
     private val finishRunnable = Runnable { finish() }
     private val listenRunnable = Runnable { if (active && !stopping && !listening) listen() }
@@ -100,16 +106,17 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
     }
 
     private fun listen() {
-        val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(ctx).also {
+        val r = recognizer ?: createRecognizer().also {
             it.setRecognitionListener(this)
             recognizer = it
         }
         segmentSinhala = wantSinhala
+        segmentLang = if (segmentSinhala) "si-LK" else "en-US"
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (segmentSinhala) "si-LK" else "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, segmentLang)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            if (segmentLang !in onlineOnly) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
@@ -160,6 +167,19 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
                 finish()
             }
 
+            12, 13 -> { // language not supported / not downloaded (Android 12+)
+                if (segmentLang !in onlineOnly) {
+                    onlineOnly.add(segmentLang)   // try again, allowing Google to use the internet
+                    next()
+                } else {
+                    if (!problemShown) {
+                        problemShown = true
+                        listener.onProblem(problemText(error))
+                    }
+                    next(500)
+                }
+            }
+
             else -> {
                 if (!problemShown) {
                     problemShown = true
@@ -168,6 +188,13 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
                 next(500)
             }
         }
+    }
+
+    /** Google's own recogniser (the one Gboard uses), not the phone maker's (e.g. Samsung's). */
+    private fun createRecognizer(): SpeechRecognizer {
+        val google = googleService(ctx)
+        return if (google != null) SpeechRecognizer.createSpeechRecognizer(ctx, google)
+        else SpeechRecognizer.createSpeechRecognizer(ctx)
     }
 
     private fun problemText(error: Int): String = when (error) {
@@ -189,4 +216,20 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
     override fun onBufferReceived(buffer: ByteArray?) {}
     override fun onEndOfSpeech() {}
     override fun onEvent(eventType: Int, params: Bundle?) {}
+
+    companion object {
+        private val PREFERRED = listOf("com.google.android.tts", "com.google.android.googlequicksearchbox")
+
+        /** Finds Google's speech recognition service: Speech Services by Google first, then the Google app. */
+        fun googleService(ctx: Context): ComponentName? {
+            val found = runCatching {
+                ctx.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+            }.getOrNull().orEmpty()
+            for (pkg in PREFERRED) {
+                val s = found.firstOrNull { it.serviceInfo?.packageName == pkg }?.serviceInfo ?: continue
+                return ComponentName(s.packageName, s.name)
+            }
+            return null
+        }
+    }
 }

@@ -11,8 +11,8 @@ android {
         applicationId = "lk.spokenenglish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-test"
+        versionCode = 2
+        versionName = "0.2-test"
         // The free Gemini key comes from the GitHub secret GEMINI_API_KEY at build time.
         // It can also be typed in the app (gear button), which overrides this one.
         val key = System.getenv("GEMINI_API_KEY") ?: ""

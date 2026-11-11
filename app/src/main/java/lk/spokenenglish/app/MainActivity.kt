@@ -225,6 +225,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         val system = partner.persona
         val snapshot = history.toList()
         val model = modelName()
+        val asked = SystemClock.elapsedRealtime()
         thread {
             val result = runCatching { GeminiClient(key, model).reply(system, snapshot) }
             main.post {
@@ -236,10 +237,11 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                     addPartnerBubble(r.text, r.ms)
                     voice.speak(r.text, partner)
                 }.onFailure { e ->
+                    val secs = (SystemClock.elapsedRealtime() - asked) / 1000
                     if (history.isNotEmpty()) history.removeAt(history.size - 1)
                     face.mood = "neutral"
                     partnerStatus.text = "${partner.name} is listening"
-                    addNote("No reply (${e.message}). Tap Talk and say it again.")
+                    addNote("No reply after $secs s (${e.message}). Tap Talk and say it again.")
                 }
             }
         }
@@ -272,6 +274,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         box.addView(keyInput)
         box.addView(label("Model (empty = $DEFAULT_MODEL)", 13f, muted))
         box.addView(modelInput)
+        val service = SpeechLoop.googleService(this)?.packageName ?: "phone default (Google not found)"
+        box.addView(label("Speech recognition: $service", 12f, muted))
         AlertDialog.Builder(this)
             .setTitle("Test settings")
             .setView(box)
@@ -461,7 +465,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         wrap.addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
         wrap.addView(label("What the app heard", 11.5f, muted).apply { gravity = Gravity.END })
-        addToMessages(wrap, Gravity.END)
+        addToMessages(wrap, Gravity.END, fullWidth = true)
     }
 
     /** Partner speech is voice only; the words appear only if he taps "Show words". */
@@ -499,8 +503,9 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         addToMessages(note, Gravity.START)
     }
 
-    private fun addToMessages(v: View, gravity: Int) {
-        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+    private fun addToMessages(v: View, gravity: Int, fullWidth: Boolean = false) {
+        val width = if (fullWidth) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
+        val lp = LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             this.gravity = gravity
             topMargin = dp(10)
         }

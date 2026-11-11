@@ -4,6 +4,7 @@ import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 
@@ -14,15 +15,32 @@ class GeminiClient(private val key: String, private val model: String) {
 
     class HttpError(val code: Int, message: String) : Exception(message)
 
+    companion object {
+        const val THINK_LEVEL = 0
+        const val THINK_BUDGET = 1
+        const val THINK_DEFAULT = 2
+        const val READ_TIMEOUT_MS = 45000
+    }
+
     /** history: pairs of role ("user" or "model") and text, oldest first. */
     fun reply(system: String, history: List<Pair<String, String>>): Reply {
         val t0 = SystemClock.elapsedRealtime()
-        val raw = try {
-            call(system, history, turnOffThinking = true)
-        } catch (e: HttpError) {
-            // Some models don't accept the "no thinking" setting; try once without it.
-            if (e.code == 400) call(system, history, turnOffThinking = false) else throw e
+        // Newer Gemini models (3.x) use "thinkingLevel"; 2.x use "thinkingBudget". Try the quickest
+        // setting first; if the model rejects it (HTTP 400), try the next one.
+        var raw: String? = null
+        var last: Exception? = null
+        for (mode in listOf(THINK_LEVEL, THINK_BUDGET, THINK_DEFAULT)) {
+            try {
+                raw = call(system, history, mode)
+                break
+            } catch (e: HttpError) {
+                last = e
+                if (e.code != 400) throw e
+            } catch (e: SocketTimeoutException) {
+                throw Exception("Gemini took longer than ${READ_TIMEOUT_MS / 1000} s")
+            }
         }
+        if (raw == null) throw last ?: Exception("No reply")
         val ms = SystemClock.elapsedRealtime() - t0
         val clean = raw.trim()
             .removePrefix("```json").removePrefix("```")
@@ -35,7 +53,7 @@ class GeminiClient(private val key: String, private val model: String) {
         }
     }
 
-    private fun call(system: String, history: List<Pair<String, String>>, turnOffThinking: Boolean): String {
+    private fun call(system: String, history: List<Pair<String, String>>, thinking: Int): String {
         val body = JSONObject()
         body.put(
             "systemInstruction",
@@ -54,7 +72,10 @@ class GeminiClient(private val key: String, private val model: String) {
             .put("responseMimeType", "application/json")
             .put("temperature", 0.9)
             .put("maxOutputTokens", 1024)
-        if (turnOffThinking) config.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        when (thinking) {
+            THINK_LEVEL -> config.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+            THINK_BUDGET -> config.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        }
         body.put("generationConfig", config)
 
         val url = URL(
@@ -65,7 +86,7 @@ class GeminiClient(private val key: String, private val model: String) {
         try {
             con.requestMethod = "POST"
             con.connectTimeout = 15000
-            con.readTimeout = 30000
+            con.readTimeout = READ_TIMEOUT_MS
             con.doOutput = true
             con.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             con.setRequestProperty("x-goog-api-key", key)
