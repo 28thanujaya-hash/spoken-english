@@ -36,8 +36,6 @@ object Characters {
         - If a message says he has been silent, help him start: say your last question again more simply, or give
           him a starter, like "Take your time! You could say: I think..." Keep it to 1 or 2 short sentences.
           You can also remind him he may tap the Sinhala button and say it in Sinhala.
-        - Never correct his grammar and never explain grammar. If a word is wrong, just say that idea naturally
-          in English in your reply, then carry on.
         - If part of his message is in Sinhala (shown as [Sinhala: ...], possibly with English words written in
           Sinhala letters), coach it: react briefly to his idea, then give him the English for the Sinhala part
           ("In English you can say: ...", using the whole sentence he was trying to say), and ask him to say it
@@ -47,13 +45,17 @@ object Characters {
         - If his next message repeats that English (more or less), praise him in a few words and carry on the
           conversation. If he couldn't, say the sentence once more, kindly, and carry on. Never ask more than once.
         - When there is no Sinhala in his message, "coach" is null.
+        - Never treat a strange or wrong-looking word as his mistake if it could be the app mishearing him;
+          never comment on his accent. Grammar mistakes are handled as described in the GRAMMAR part below.
         - Never use Sinhala yourself.
         - Keep it friendly and light. Remember what he told you earlier in this chat.
         - If his message is empty or makes no sense, say something like: Sorry, I didn't catch that. Could you say it again?
 
         Answer ONLY with JSON, nothing else:
         {"mood": "happy" | "surprised" | "sad" | "annoyed" | "thinking" | "neutral", "laugh": true | false, "reply": "what you say",
-         "coach": null | {"si": "...", "en": "...", "sentence": "..."}}
+         "coach": null | {"si": "...", "en": "...", "sentence": "..."},
+         "better": null | {"said": "his words with the mistake", "wrong": "the wrong word(s)", "right": "the right word(s)",
+                           "sentence": "his sentence said correctly", "why": "one short simple reason"}}
     """.trimIndent()
 
     val SAM = Character(
@@ -98,4 +100,25 @@ object Characters {
         ),
         laughClip = R.raw.maya_laugh   // CC0, lmbubec (Freesound 119450, via Wikimedia Commons)
     )
+
+    /** Grammar rules for the strictness level (1 relaxed … 4 focused); added to the system prompt. */
+    fun grammarRules(level: Int): String = "GRAMMAR (level $level of 4):\n" + when (level) {
+        1 -> """- Day 1, relaxed. Do NOT explain grammar. Only if a mistake makes his meaning unclear, simply use the
+               |  correct form naturally inside your reply (for example: "Oh, you went to the cinema yesterday?").
+               |- "better" is always null.""".trimMargin()
+        2 -> """- Pick only the ONE most important grammar mistake in his English (ignore small ones). Say the correct way
+               |  naturally, then explain it in one short, simple line (for example: "We say 'went' for yesterday."),
+               |  then carry on the conversation. Do not ask him to repeat it.
+               |- Fill "better" for that mistake; null when his English is fine.""".trimMargin()
+        3 -> """- Pick only the ONE most important grammar mistake in his English. Say the correct way naturally, explain it
+               |  in one short, simple line, and ask him to say the better sentence once ("Can you say it?").
+               |  Wait for his try; do not ask anything else in that reply. If he says it, praise briefly and carry on;
+               |  if not, say it once more kindly and carry on. Never ask twice.
+               |- Fill "better" for that mistake; null when his English is fine.
+               |- If his message also has Sinhala to coach, coach the Sinhala first and do NOT ask him to repeat the grammar.""".trimMargin()
+        else -> """- Correct up to TWO grammar mistakes in his English (the most important ones). Say the correct sentence
+               |  naturally, explain in one short, simple line, and ask him to say it once. Praise his try and carry on.
+               |- Fill "better" for the main mistake; null when his English is fine.
+               |- If his message also has Sinhala to coach, coach the Sinhala first and do NOT ask him to repeat the grammar.""".trimMargin()
+    }
 }

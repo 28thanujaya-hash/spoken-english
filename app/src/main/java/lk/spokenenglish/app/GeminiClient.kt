@@ -15,7 +15,10 @@ class GeminiClient(private val key: String, private val model: String) {
     class Reply(
         val mood: String, val text: String, val laugh: Boolean, val ms: Long, val modelVersion: String,
         /** When his turn had Sinhala: his Sinhala words, their English, and the whole sentence in English. */
-        val coachSi: String = "", val coachEn: String = "", val coachSentence: String = ""
+        val coachSi: String = "", val coachEn: String = "", val coachSentence: String = "",
+        /** A grammar correction ("Better English" card), or empty. */
+        val betterSaid: String = "", val betterWrong: String = "", val betterRight: String = "",
+        val betterSentence: String = "", val betterWhy: String = ""
     )
 
     class HttpError(val code: Int, message: String, val body: String = "") : Exception(message) {
@@ -63,6 +66,8 @@ class GeminiClient(private val key: String, private val model: String) {
             val j = JSONObject(clean)
             val said = j.optString("reply", clean)
             val coach = j.optJSONObject("coach")
+            val better = j.optJSONObject("better")
+            fun b(k: String) = better?.optString(k, "")?.trim().orEmpty()
             Reply(
                 j.optString("mood", "neutral"),
                 stripSounds(said),
@@ -70,7 +75,8 @@ class GeminiClient(private val key: String, private val model: String) {
                 ms, version,
                 coach?.optString("si", "")?.trim().orEmpty(),
                 coach?.optString("en", "")?.trim().orEmpty(),
-                coach?.optString("sentence", "")?.trim().orEmpty()
+                coach?.optString("sentence", "")?.trim().orEmpty(),
+                b("said"), b("wrong"), b("right"), b("sentence"), b("why")
             )
         } catch (e: Exception) {
             Reply("neutral", stripSounds(clean), hasSounds(clean), ms, version)

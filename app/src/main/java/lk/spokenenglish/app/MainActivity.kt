@@ -115,9 +115,10 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private val hideUndo = Runnable { undoSegments = null; if (::undoBar.isInitialized) undoBar.visibility = View.GONE }
 
     // ---- Sinhala → English coaching ----
-    private var openCoach: CoachCard? = null
+    /** Cards waiting for his try ("Your turn"): settled on his next turn. */
+    private val openCards = mutableListOf<CoachCard>()
 
-    private inner class CoachCard(val si: String, val en: String, val sentence: String, val footer: TextView)
+    private inner class CoachCard(val kind: String, val si: String, val en: String, val sentence: String, val footer: TextView)
 
     // ---- partner state ----
     private var waitingReply = false
@@ -157,6 +158,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         updater = Updater(this) { addNote(it) }
         updater.onReady = { maybeUpdate() }
         updater.greetAfterUpdate()
+        courseDay()   // remembers Day 1
         updater.check(force = true)
 
         speech = SpeechLoop(this, this)
@@ -458,7 +460,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         face.mood = "thinking"
         partnerStatus.text = "${partner.name} is thinking…"
 
-        val system = partner.persona
+        val system = partner.persona + "\n\n" + Characters.grammarRules(grammarLevel())
         val snapshot = history.toList()
         val who = partner
         thread {
@@ -470,13 +472,17 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                 result.onSuccess { r ->
                     history.add("model" to JSONObject().put("mood", r.mood).put("laugh", r.laugh).put("reply", r.text)
                         .put("coach", if (r.coachSi.isBlank()) JSONObject.NULL else JSONObject().put("si", r.coachSi).put("en", r.coachEn).put("sentence", r.coachSentence))
+                        .put("better", if (r.betterSentence.isBlank()) JSONObject.NULL else JSONObject().put("said", r.betterSaid).put("wrong", r.betterWrong).put("right", r.betterRight).put("sentence", r.betterSentence).put("why", r.betterWhy))
                         .toString())
                     prefs.edit().putString("lastModelVersion", r.modelVersion).apply()
                     if (!nudge) silenceStage = 0
                     face.mood = r.mood
                     if (!inTurn) setSinhala(false)   // every new turn starts in English
                     addPartnerBubble(r.text, r.ms)
-                    if (r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())) addCoachCard(r)
+                    val coached = r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())
+                    if (coached) addCoachCard(r)
+                    val level = grammarLevel()
+                    if (level >= 2 && r.betterSentence.isNotBlank()) addBetterCard(r, askTry = level >= 3 && !coached)
                     if (r.laugh) laughThenSpeak(r.text) else voice.speak(r.text, partner)
                 }.onFailure { e ->
                     if (history.isNotEmpty()) history.removeAt(history.size - 1)
@@ -647,6 +653,24 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private fun modelName(): String =
         prefs.getString("model", "")?.takeIf { it.isNotBlank() } ?: DEFAULT_MODEL
 
+    /** Day of the course: day 1 is the first day the app was used. */
+    private fun courseDay(): Int {
+        val today = System.currentTimeMillis() / 86_400_000L
+        var first = prefs.getLong("firstDay", -1L)
+        if (first < 0) { first = today; prefs.edit().putLong("firstDay", first).apply() }
+        return (today - first + 1).toInt()
+    }
+
+    private fun levelForDay(day: Int): Int = when {
+        day <= 1 -> 1
+        day <= 3 -> 2
+        day <= 7 -> 3
+        else -> 4
+    }
+
+    /** Grammar strictness: set in ⚙ for testing, otherwise it rises day by day. */
+    private fun grammarLevel(): Int = prefs.getInt("grammarLevel", 0).takeIf { it in 1..4 } ?: levelForDay(courseDay())
+
     private fun openSettings() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -662,6 +686,13 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             setText(prefs.getString("model", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         }
+        val levelInput = EditText(this).apply {
+            hint = "by day"
+            setText(prefs.getInt("grammarLevel", 0).takeIf { it in 1..4 }?.toString() ?: "")
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        box.addView(label("Grammar level 1–4 (empty = by day: today is day ${courseDay()}, level ${levelForDay(courseDay())})", 13f, muted))
+        box.addView(levelInput)
         box.addView(label("Gemini key (empty = the one built into the app)", 13f, muted))
         box.addView(keyInput)
         box.addView(label("Model (empty = $DEFAULT_MODEL; backup = $BACKUP_MODEL)", 13f, muted))
@@ -687,6 +718,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                 prefs.edit()
                     .putString("key", keyInput.text.toString().trim())
                     .putString("model", modelInput.text.toString().trim())
+                    .putInt("grammarLevel", levelInput.text.toString().trim().toIntOrNull()?.takeIf { it in 1..4 } ?: 0)
                     .apply()
             }
             .setNeutralButton("Clear limits") { _, _ ->
@@ -964,42 +996,100 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     // ---- Sinhala → English card ----
 
     private fun addCoachCard(r: GeminiClient.Reply) {
-        // An earlier card he never tried is saved for later practice.
-        openCoach?.let { saveForLater(it); it.footer.text = "Saved: practise it later in \"Say them again\""; styleFooter(it.footer, "later") }
         val sentence = r.coachSentence.ifBlank { r.coachEn }
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = rounded(Color.WHITE, dp(16), orange, strokeDp = 2)
-            setPadding(dp(13), dp(10), dp(13), dp(11))
-        }
+        val english = r.coachEn.ifBlank { sentence }
+        val card = cardBox(orange)
         card.addView(label("YOUR SINHALA IN ENGLISH", 11f, orangeDark, bold = true).apply { letterSpacing = 0.06f })
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
-        }
-        row.addView(label(r.coachSi, 17f, orangeDark).apply {
+        // Stacked lines: long Sinhala can never squeeze the English out.
+        card.addView(label(r.coachSi, 17f, orangeDark).apply {
             background = rounded(orangeLight, dp(8), null)
-            setPadding(dp(8), dp(3), dp(8), dp(3))
-        })
-        row.addView(label("  →  ", 18f, orange, bold = true))
-        row.addView(label(r.coachEn.ifBlank { sentence }, 16.5f, ink, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        card.addView(row)
-        if (sentence.isNotBlank() && sentence != r.coachEn) {
-            val full = SpannableStringBuilder("Whole sentence: ")
-            val st = full.length
-            full.append("\"").append(sentence).append("\"")
-            full.setSpan(ForegroundColorSpan(teal), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            full.setSpan(android.text.style.StyleSpan(Typeface.BOLD), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            card.addView(label("", 14.5f, ink).apply { text = full; setPadding(0, dp(8), 0, 0) })
-        }
+            setPadding(dp(9), dp(4), dp(9), dp(4))
+        }, wrapLp(top = 7))
+        card.addView(arrowLine(SpannableStringBuilder(english)), wrapLp(top = 7))
+        if (sentence.isNotBlank() && !same(sentence, english)) card.addView(wholeSentence(sentence), wrapLp(top = 7))
         val footer = label("🎤  Your turn: say it in English", 13.5f, teal, bold = true)
         styleFooter(footer, "turn")
-        card.addView(footer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(9) })
+        card.addView(footer, wrapLp(top = 9))
         addToMessages(card, Gravity.START, fullWidth = true)
-        openCoach = CoachCard(r.coachSi, r.coachEn, sentence, footer)
-        logCoach(r.coachSi, r.coachEn, sentence)
+        openCards.add(CoachCard("si", r.coachSi, english, sentence, footer))
+        logCoach(r.coachSi, english, sentence)
     }
+
+    /** Teal "Better English" card: his words with the wrong part struck out → the better sentence + why. */
+    private fun addBetterCard(r: GeminiClient.Reply, askTry: Boolean) {
+        val card = cardBox(teal)
+        card.addView(label("BETTER ENGLISH", 11f, teal, bold = true).apply { letterSpacing = 0.06f })
+        if (r.betterSaid.isNotBlank()) {
+            val said = SpannableStringBuilder("You said: ")
+            val st = said.length
+            said.append(r.betterSaid)
+            mark(said, st, r.betterWrong) { a, z ->
+                said.setSpan(android.text.style.StrikethroughSpan(), a, z, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                said.setSpan(ForegroundColorSpan(Color.parseColor("#B3261E")), a, z, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            card.addView(label("", 15f, muted).apply { text = said }, wrapLp(top = 7))
+        }
+        val better = SpannableStringBuilder(r.betterSentence)
+        mark(better, 0, r.betterRight) { a, z ->
+            better.setSpan(BackgroundColorSpan(tealLight), a, z, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            better.setSpan(ForegroundColorSpan(teal), a, z, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        card.addView(arrowLine(better, teal), wrapLp(top = 7))
+        if (r.betterWhy.isNotBlank()) {
+            val why = SpannableStringBuilder("Why: ")
+            why.setSpan(ForegroundColorSpan(teal), 0, 4, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            why.setSpan(android.text.style.StyleSpan(Typeface.BOLD), 0, 4, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            why.append(r.betterWhy)
+            card.addView(label("", 14f, ink).apply {
+                text = why
+                background = rounded(cream, dp(10), null)
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        }
+        if (askTry) {
+            val footer = label("🎤  Your turn: say the better sentence", 13.5f, teal, bold = true)
+            styleFooter(footer, "turn")
+            card.addView(footer, wrapLp(top = 9))
+            openCards.add(CoachCard("grammar", r.betterSaid, r.betterRight, r.betterSentence, footer))
+        }
+        addToMessages(card, Gravity.START, fullWidth = true)
+        appendJson("grammarLog", r.betterSaid, r.betterRight, r.betterSentence)
+    }
+
+    private fun cardBox(border: Int) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(Color.WHITE, dp(16), border, strokeDp = 2)
+        setPadding(dp(13), dp(10), dp(13), dp(11))
+    }
+
+    private fun wrapLp(top: Int) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(top) }
+
+    /** "→ text" in bold, the arrow in orange (or the given colour). */
+    private fun arrowLine(text: CharSequence, arrowColor: Int = orange): TextView {
+        val sb = SpannableStringBuilder("→  ")
+        sb.setSpan(ForegroundColorSpan(arrowColor), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sb.append(text)
+        return label("", 16.5f, ink, bold = true).apply { this.text = sb }
+    }
+
+    private fun wholeSentence(sentence: String): TextView {
+        val full = SpannableStringBuilder("Whole sentence: ")
+        val st = full.length
+        full.append("\"").append(sentence).append("\"")
+        full.setSpan(ForegroundColorSpan(teal), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        full.setSpan(android.text.style.StyleSpan(Typeface.BOLD), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return label("", 14.5f, ink).apply { text = full }
+    }
+
+    /** Applies a style to the first match of part (case-insensitive) after start. */
+    private fun mark(sb: SpannableStringBuilder, start: Int, part: String, style: (Int, Int) -> Unit) {
+        if (part.isBlank()) return
+        val i = sb.toString().indexOf(part, start, ignoreCase = true)
+        if (i >= 0) style(i, i + part.length)
+    }
+
+    private fun same(a: String, b: String): Boolean =
+        a.lowercase().replace(Regex("[^a-z ]"), "").trim() == b.lowercase().replace(Regex("[^a-z ]"), "").trim()
 
     private fun styleFooter(v: TextView, kind: String) {
         when (kind) {
@@ -1012,17 +1102,19 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     /** After his next turn: did he say the English himself? */
     private fun settleCoach(said: List<Pair<String, Boolean>>) {
-        val c = openCoach ?: return
-        openCoach = null
+        if (openCards.isEmpty()) return
         val english = said.filter { !it.second }.joinToString(" ") { it.first }
-        if (saidIt(english, c.sentence) || (c.en.isNotBlank() && saidIt(english, c.en))) {
-            c.footer.text = "✓  You said it in English!"
-            styleFooter(c.footer, "done")
-        } else {
-            c.footer.text = "Saved: practise it later in \"Say them again\""
-            styleFooter(c.footer, "later")
-            saveForLater(c)
+        for (c in openCards) {
+            if (saidIt(english, c.sentence) || (c.kind == "si" && c.en.isNotBlank() && saidIt(english, c.en))) {
+                c.footer.text = if (c.kind == "si") "✓  You said it in English!" else "✓  Well said!"
+                styleFooter(c.footer, "done")
+            } else {
+                c.footer.text = "Saved: practise it later in \"Say them again\""
+                styleFooter(c.footer, "later")
+                saveForLater(c)
+            }
         }
+        openCards.clear()
     }
 
     /** Most of the target words appear in what he said (speech recognition is never perfect). */
