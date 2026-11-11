@@ -18,7 +18,8 @@ import android.speech.SpeechRecognizer
  * the words go to the "So far" box and listening starts again straight away. The turn only
  * ends when stop() is called (↑ send or ■ pause) or cancel() (✕).
  *
- * English (en-US) normally; Sinhala (si-LK) while the Sinhala button is held.
+ * English (en-US) normally; Sinhala (si-LK) while the Sinhala switch is on.
+ * Uses Google's online recogniser (more accurate; there is always internet).
  */
 class SpeechLoop(private val ctx: Context, private val listener: Listener) : RecognitionListener {
 
@@ -41,8 +42,6 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
     private var segmentSinhala = false
     private var problemShown = false
 
-    /** Languages for which "prefer offline" failed; for those we let Google use the internet. */
-    private val onlineOnly = mutableSetOf<String>()
     private var segmentLang = "en-US"
 
     private val finishRunnable = Runnable { finish() }
@@ -59,7 +58,7 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         listen()
     }
 
-    /** Called when the Sinhala button is pressed (true) or released (false). */
+    /** Called when the EN | සිං switch changes. */
     fun setSinhala(on: Boolean) {
         if (!active || stopping || on == wantSinhala) return
         wantSinhala = on
@@ -129,7 +128,6 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, segmentLang)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            if (segmentLang !in onlineOnly) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
@@ -180,19 +178,6 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
                 finish()
             }
 
-            12, 13 -> { // language not supported / not downloaded (Android 12+)
-                if (segmentLang !in onlineOnly) {
-                    onlineOnly.add(segmentLang)   // try again, allowing Google to use the internet
-                    next()
-                } else {
-                    if (!problemShown) {
-                        problemShown = true
-                        listener.onProblem(problemText(error))
-                    }
-                    next(500)
-                }
-            }
-
             else -> {
                 if (!problemShown) {
                     problemShown = true
@@ -212,7 +197,7 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
 
     private fun problemText(error: Int): String = when (error) {
         SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-            "No internet, and this language isn't downloaded for offline use."
+            "No internet. Check the connection."
         12, 13 -> // ERROR_LANGUAGE_NOT_SUPPORTED, ERROR_LANGUAGE_UNAVAILABLE (Android 12+)
             "This language isn't available. Download it in Google voice typing settings."
         SpeechRecognizer.ERROR_AUDIO -> "The microphone had a problem."

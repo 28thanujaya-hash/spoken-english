@@ -12,7 +12,11 @@ import java.net.URLEncoder
 class GeminiClient(private val key: String, private val model: String) {
 
     /** modelVersion = the model Google actually used (aliases like "flash-lite-latest" change over time). */
-    class Reply(val mood: String, val text: String, val laugh: Boolean, val ms: Long, val modelVersion: String)
+    class Reply(
+        val mood: String, val text: String, val laugh: Boolean, val ms: Long, val modelVersion: String,
+        /** When his turn had Sinhala: his Sinhala words, their English, and the whole sentence in English. */
+        val coachSi: String = "", val coachEn: String = "", val coachSentence: String = ""
+    )
 
     class HttpError(val code: Int, message: String, val body: String = "") : Exception(message) {
         /** A free-tier daily limit (as opposed to the per-minute one). */
@@ -20,16 +24,7 @@ class GeminiClient(private val key: String, private val model: String) {
     }
 
     companion object {
-        const val THINK_LEVEL = 0
-        const val THINK_BUDGET = 1
-        const val THINK_DEFAULT = 2
         const val READ_TIMEOUT_MS = 30000
-
-        /**
-         * Which thinking setting each model accepts. Learned once, then reused, so a rejected
-         * setting (HTTP 400) costs at most one extra call per model per app run.
-         */
-        private val workingMode = mutableMapOf<String, Int>()
 
         /** Laughs and sounds the voice would read out like words, plus emojis. */
         private val SOUNDS = Regex(
@@ -49,30 +44,17 @@ class GeminiClient(private val key: String, private val model: String) {
             Regex("(?i)\\b(?:a?ha(?:ha)+h?|he(?:he)+|lol|lmao)\\b").containsMatchIn(text)
     }
 
-    /** history: pairs of role ("user" or "model") and text, oldest first. */
+    /**
+     * history: pairs of role ("user" or "model") and text, oldest first.
+     * No thinking setting is sent: each model runs on its own default (mentor's decision, 11 Nov).
+     */
     fun reply(system: String, history: List<Pair<String, String>>): Reply {
         val t0 = SystemClock.elapsedRealtime()
-        // Newer Gemini models (3.x) use "thinkingLevel"; 2.x use "thinkingBudget". Start with the setting
-        // that worked last time; on HTTP 400 try the next one. Any other error (429 limit, 5xx) is not retried.
-        val known = workingMode[model]
-        val order = if (known != null) listOf(known) + listOf(THINK_LEVEL, THINK_BUDGET, THINK_DEFAULT).filter { it != known }
-        else listOf(THINK_LEVEL, THINK_BUDGET, THINK_DEFAULT)
-        var raw: Pair<String, String>? = null
-        var last: Exception? = null
-        for (mode in order) {
-            try {
-                raw = call(system, history, mode)
-                workingMode[model] = mode
-                break
-            } catch (e: HttpError) {
-                last = e
-                if (e.code != 400) throw e
-            } catch (e: SocketTimeoutException) {
-                throw Exception("Gemini took longer than ${READ_TIMEOUT_MS / 1000} s")
-            }
+        val (text, version) = try {
+            call(system, history)
+        } catch (e: SocketTimeoutException) {
+            throw Exception("Gemini took longer than ${READ_TIMEOUT_MS / 1000} s")
         }
-        if (raw == null) throw last ?: Exception("No reply")
-        val (text, version) = raw
         val ms = SystemClock.elapsedRealtime() - t0
         val clean = text.trim()
             .removePrefix("```json").removePrefix("```")
@@ -80,11 +62,15 @@ class GeminiClient(private val key: String, private val model: String) {
         return try {
             val j = JSONObject(clean)
             val said = j.optString("reply", clean)
+            val coach = j.optJSONObject("coach")
             Reply(
                 j.optString("mood", "neutral"),
                 stripSounds(said),
                 j.optBoolean("laugh", false) || hasSounds(said),
-                ms, version
+                ms, version,
+                coach?.optString("si", "")?.trim().orEmpty(),
+                coach?.optString("en", "")?.trim().orEmpty(),
+                coach?.optString("sentence", "")?.trim().orEmpty()
             )
         } catch (e: Exception) {
             Reply("neutral", stripSounds(clean), hasSounds(clean), ms, version)
@@ -92,7 +78,7 @@ class GeminiClient(private val key: String, private val model: String) {
     }
 
     /** Returns (reply text, modelVersion). */
-    private fun call(system: String, history: List<Pair<String, String>>, thinking: Int): Pair<String, String> {
+    private fun call(system: String, history: List<Pair<String, String>>): Pair<String, String> {
         val body = JSONObject()
         body.put(
             "systemInstruction",
@@ -111,10 +97,6 @@ class GeminiClient(private val key: String, private val model: String) {
             .put("responseMimeType", "application/json")
             .put("temperature", 0.9)
             .put("maxOutputTokens", 1024)
-        when (thinking) {
-            THINK_LEVEL -> config.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
-            THINK_BUDGET -> config.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
-        }
         body.put("generationConfig", config)
 
         val url = URL(

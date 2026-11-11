@@ -18,10 +18,9 @@ import kotlin.concurrent.thread
 /**
  * In-app updates. Every GitHub build publishes the APK as the latest release of the public repo
  * BuildConfig.UPDATE_REPO (tag "v<versionCode>", file "spoken-english.apk"). The app checks it,
- * downloads a newer one in the background and installs it when he is not in the middle of talking.
- *
- * Android 12+: after the first update installed this way, later updates install without asking
- * (the app is then its own installer). The very first one may show Android's "Update?" box.
+ * downloads a newer one in the background, then ASKS (Update / Later) when he is not talking.
+ * Nothing installs without his tap (mentor's decision, 11 Nov). Android may add its own
+ * confirmation the first time.
  */
 class Updater(private val activity: Activity, private val note: (String) -> Unit) {
 
@@ -31,7 +30,9 @@ class Updater(private val activity: Activity, private val note: (String) -> Unit
     private var ready: File? = null
     private var readyCode = 0
     private var installing = false
-    private var askedPermission = false
+    private var asking = false
+    private var declined = false
+    private var waitingPermission = false
 
     /** Called when a newer version has been downloaded. */
     var onReady: (() -> Unit)? = null
@@ -53,32 +54,53 @@ class Updater(private val activity: Activity, private val note: (String) -> Unit
         }
     }
 
-    /** Installs a downloaded update. Call when he is idle (not talking, no reply pending). */
-    fun installIfReady() {
+    /**
+     * When a downloaded update is waiting and he is idle, asks: "A new version is ready. Update now?"
+     * Nothing installs until he taps Update. "Later" asks again next time the app starts.
+     */
+    fun offerIfReady() {
+        if (ready == null || installing || asking || declined) return
+        asking = true
+        android.app.AlertDialog.Builder(activity)
+            .setTitle("New version ready")
+            .setMessage("A new version of the app is ready. Update now? The app will close for a moment; open it again afterwards.")
+            .setPositiveButton("Update") { _, _ -> asking = false; startInstall() }
+            .setNegativeButton("Later") { _, _ -> asking = false; declined = true }
+            .setOnCancelListener { asking = false; declined = true }
+            .show()
+    }
+
+    /** Called when he comes back from the "Allow from this source" screen. */
+    fun resumeAfterPermission() {
+        if (waitingPermission && activity.packageManager.canRequestPackageInstalls()) {
+            waitingPermission = false
+            startInstall()
+        }
+    }
+
+    private fun startInstall() {
         val apk = ready ?: return
         if (installing) return
         if (!activity.packageManager.canRequestPackageInstalls()) {
-            if (!askedPermission) {
-                askedPermission = true
-                android.app.AlertDialog.Builder(activity)
-                    .setTitle("Allow app updates")
-                    .setMessage("A new version is ready. To let the app update itself, turn on \"Allow from this source\" on the next screen, then come back. You only do this once.")
-                    .setPositiveButton("Open settings") { _, _ ->
-                        runCatching {
-                            activity.startActivity(
-                                Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                    android.net.Uri.parse("package:" + activity.packageName))
-                            )
-                        }
+            waitingPermission = true
+            android.app.AlertDialog.Builder(activity)
+                .setTitle("Allow app updates")
+                .setMessage("To let the app update itself, turn on \"Allow from this source\" on the next screen, then come back. You only do this once.")
+                .setPositiveButton("Open settings") { _, _ ->
+                    runCatching {
+                        activity.startActivity(
+                            Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                android.net.Uri.parse("package:" + activity.packageName))
+                        )
                     }
-                    .setNegativeButton("Later", null)
-                    .show()
-            }
+                }
+                .setNegativeButton("Later") { _, _ -> waitingPermission = false; declined = true }
+                .show()
             return
         }
         installing = true
-        note("A new version is ready. Updating now: the app will close for a moment. Open it again afterwards.")
-        main.postDelayed({ install(apk) }, 1500)
+        note("Updating… the app will close for a moment. Open it again afterwards.")
+        main.postDelayed({ install(apk) }, 1200)
     }
 
     /** Shows "Updated" once after a new version starts. */

@@ -75,14 +75,20 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     // Bottom area
     private lateinit var nudgeText: TextView
     private lateinit var liveText: TextView
-    private lateinit var cancelButton: IconButton
-    private lateinit var sinhalaButton: TextView
-    private lateinit var waitingLine: TextView
+    private lateinit var discardChip: TextView
+    private lateinit var undoBar: LinearLayout
+    private lateinit var langSwitch: LinearLayout
+    private lateinit var enSide: TextView
+    private lateinit var siSide: TextView
+    private lateinit var spacer: View
     private lateinit var statusLine: TextView
     private lateinit var bars: SoundBarsView
     private lateinit var pauseButton: IconButton
+    private lateinit var pauseBox: LinearLayout
     private lateinit var micButton: IconButton
     private lateinit var sendButton: IconButton
+    private lateinit var sendBox: LinearLayout
+    private lateinit var cardsBox: LinearLayout
 
     private lateinit var speech: SpeechLoop
     private lateinit var voice: CharacterVoice
@@ -103,9 +109,15 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private var finishing = false         // waiting for the last words after ■ or ↑
     private var endAction: End? = null
     private var readyPending = false      // "Getting ready…" until the recogniser really listens
-    private var sinhalaHeld = false
-    private var sinhalaStartedTurn = false
-    private var sinhalaDownAt = 0L
+    private var sinhalaOn = false          // the EN | සිං switch (one tap; back to English after each reply)
+    private var switchPending = false      // switching language: buzz when the new language is listening
+    private var undoSegments: List<Pair<String, Boolean>>? = null
+    private val hideUndo = Runnable { undoSegments = null; if (::undoBar.isInitialized) undoBar.visibility = View.GONE }
+
+    // ---- Sinhala → English coaching ----
+    private var openCoach: CoachCard? = null
+
+    private inner class CoachCard(val si: String, val en: String, val sentence: String, val footer: TextView)
 
     // ---- partner state ----
     private var waitingReply = false
@@ -123,7 +135,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             if (!recording || finishing || readyPending) return
             if (!recordNudgeShown && SystemClock.elapsedRealtime() - lastVoiceAt >= RECORD_SILENCE_MS) {
                 recordNudgeShown = true
-                showNudge("Take your time. Keep going, or hold සිං and say it in Sinhala.")
+                showNudge("Take your time. Keep going, or tap සිං and say it in Sinhala.")
             }
             main.postDelayed(this, 1000)
         }
@@ -134,6 +146,10 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("settings", MODE_PRIVATE)
+        // An old model typed into ⚙ during earlier tests (e.g. the slow gemini-3.8-flash) is cleared once.
+        if (!prefs.getBoolean("modelReset05", false)) {
+            prefs.edit().remove("model").putBoolean("modelReset05", true).apply()
+        }
         vibrator = getSystemService(Vibrator::class.java)
         buildUi()
         showIdle()
@@ -172,14 +188,14 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     override fun onResume() {
         super.onResume()
-        if (::updater.isInitialized) { updater.check(); maybeUpdate() }
+        if (::updater.isInitialized) { updater.resumeAfterPermission(); updater.check(); maybeUpdate() }
     }
 
-    /** Installs a downloaded update only when he isn't talking and nobody is speaking. */
+    /** Offers a downloaded update (Update / Later) only when he isn't talking and nobody is speaking. */
     private fun maybeUpdate() {
         if (!::updater.isInitialized) return
         if (inTurn || waitingReply || partnerTalking || laughing) return
-        updater.installIfReady()
+        updater.offerIfReady()
     }
 
     override fun onStop() {
@@ -226,8 +242,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private fun onMicTap() {
         if (waitingReply || finishing) return
         when {
-            !inTurn -> beginTurn(sinhala = false)
-            !recording -> resumeTurn(sinhala = false)   // paused: new words are added after the old ones
+            !inTurn -> beginTurn(sinhala = sinhalaOn)
+            !recording -> resumeTurn(sinhala = sinhalaOn)   // paused: new words are added after the old ones
         }
     }
 
@@ -251,48 +267,57 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
     }
 
-    private fun onCancelTap() {
+    /** ✕ Discard: throws the turn away, but UNDO brings it back for 3 seconds. */
+    private fun onDiscardTap() {
         if (!inTurn) return
+        if (partial.isNotBlank()) segments.add(partial to sinhalaOn)
+        val kept = segments.toList()
         speech.cancel()
         recording = false
         finishing = false
         closeTurn()
+        if (kept.isNotEmpty()) {
+            undoSegments = kept
+            undoBar.visibility = View.VISIBLE
+            main.removeCallbacks(hideUndo)
+            main.postDelayed(hideUndo, 3000)
+        }
         armSilenceTimer()
     }
 
-    private fun onSinhalaDown() {
-        if (waitingReply || finishing) return
-        sinhalaHeld = true
-        sinhalaDownAt = SystemClock.elapsedRealtime()
-        stopSinhalaPulse()
-        setSinhalaLook(true)
-        when {
-            !inTurn -> { sinhalaStartedTurn = true; beginTurn(sinhala = true) }
-            !recording -> { sinhalaStartedTurn = false; resumeTurn(sinhala = true) }
-            else -> speech.setSinhala(true)
-        }
+    private fun onUndoTap() {
+        val kept = undoSegments ?: return
+        main.removeCallbacks(hideUndo)
+        undoSegments = null
+        undoBar.visibility = View.GONE
+        segments.clear()
+        segments.addAll(kept)
+        partial = ""
+        inTurn = true
+        main.removeCallbacks(silenceCheck)
+        showPaused()
     }
 
-    private fun onSinhalaUp() {
-        if (!sinhalaHeld) return
-        sinhalaHeld = false
-        setSinhalaLook(false)
-        if (!recording || finishing) return
-        if (sinhalaStartedTurn) {
-            sinhalaStartedTurn = false
-            if (SystemClock.elapsedRealtime() - sinhalaDownAt < 450 && segments.isEmpty() && partial.isBlank()) {
-                // A quick tap, not a hold: nothing said yet, so close quietly and explain.
-                onCancelTap()
-                showNudge("Hold සිං while you talk, then let go.")
-                return
-            }
-            // The turn was started by holding Sinhala: letting go sends it.
-            endAction = End.SEND
-            finishing = true
-            showFinishing("Sending…")
-            speech.stop()
+    /** EN | සිං switch: one tap. Tapping සිං while waiting starts the turn in Sinhala. */
+    private fun onSwitchTap(toSinhala: Boolean) {
+        if (waitingReply || finishing) return
+        stopSinhalaPulse()
+        if (!inTurn) {
+            setSinhala(toSinhala)
+            if (toSinhala) beginTurn(sinhala = true)
+            return
+        }
+        if (toSinhala == sinhalaOn) return
+        setSinhala(toSinhala)
+        if (recording) {
+            switchPending = true
+            bars.visibility = View.GONE
+            statusLine.text = if (toSinhala) "Switching to Sinhala…" else "Switching to English…"
+            statusLine.setTextColor(if (toSinhala) orange else teal)
+            statusLine.visibility = View.VISIBLE
+            speech.setSinhala(toSinhala)
         } else {
-            speech.setSinhala(false)   // back to English; the turn goes on until ↑
+            resumeTurn(sinhala = toSinhala)   // paused: carry on in the chosen language
         }
     }
 
@@ -300,6 +325,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     private fun beginTurn(sinhala: Boolean) {
         if (!micAllowed()) return
+        main.removeCallbacks(hideUndo); undoSegments = null; undoBar.visibility = View.GONE
         stopVoiceAndLaugh()
         segments.clear()
         partial = ""
@@ -336,6 +362,13 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     }
 
     override fun onListening() {
+        if (switchPending) {
+            switchPending = false
+            buzz()
+            statusLine.visibility = View.GONE
+            bars.visibility = View.VISIBLE
+            lastVoiceAt = SystemClock.elapsedRealtime()
+        }
         if (readyPending) {
             readyPending = false
             lastVoiceAt = SystemClock.elapsedRealtime()
@@ -374,10 +407,10 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         recording = false
         finishing = false
         main.removeCallbacks(recordingSilenceCheck)
-        if (partial.isNotBlank()) { segments.add(partial to sinhalaHeld); partial = "" }
+        if (partial.isNotBlank()) { segments.add(partial to sinhalaOn); partial = "" }
+        switchPending = false
         val action = endAction ?: End.PAUSE
         endAction = null
-        if (sinhalaHeld) { sinhalaHeld = false; setSinhalaLook(false) }
         if (action == End.SEND) sendTurn() else showPaused()
     }
 
@@ -393,6 +426,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             return
         }
         addMyBubble(said)
+        settleCoach(said)
         val forAi = said.joinToString(" ") { (t, si) -> if (si) "[Sinhala: $t]" else t }
         askPartner(forAi, nudge = false)
     }
@@ -401,7 +435,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         inTurn = false
         recording = false
         finishing = false
-        sinhalaStartedTurn = false
+        switchPending = false
         segments.clear()
         partial = ""
         main.removeCallbacks(recordingSilenceCheck)
@@ -434,11 +468,15 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                 waitingReply = false
                 setButtonsBusy(false)
                 result.onSuccess { r ->
-                    history.add("model" to JSONObject().put("mood", r.mood).put("laugh", r.laugh).put("reply", r.text).toString())
+                    history.add("model" to JSONObject().put("mood", r.mood).put("laugh", r.laugh).put("reply", r.text)
+                        .put("coach", if (r.coachSi.isBlank()) JSONObject.NULL else JSONObject().put("si", r.coachSi).put("en", r.coachEn).put("sentence", r.coachSentence))
+                        .toString())
                     prefs.edit().putString("lastModelVersion", r.modelVersion).apply()
                     if (!nudge) silenceStage = 0
                     face.mood = r.mood
+                    if (!inTurn) setSinhala(false)   // every new turn starts in English
                     addPartnerBubble(r.text, r.ms)
+                    if (r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())) addCoachCard(r)
                     if (r.laugh) laughThenSpeak(r.text) else voice.speak(r.text, partner)
                 }.onFailure { e ->
                     if (history.isNotEmpty()) history.removeAt(history.size - 1)
@@ -562,7 +600,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             }
             1 -> {
                 silenceStage = 2
-                showNudge("Stuck? Hold සිං and say it in Sinhala.")
+                showNudge("Stuck? Tap සිං and say it in Sinhala.")
                 startSinhalaPulse()
             }
         }
@@ -581,7 +619,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private fun startSinhalaPulse() {
         stopSinhalaPulse()
         sinhalaPulse = ObjectAnimator.ofPropertyValuesHolder(
-            sinhalaButton,
+            langSwitch,
             PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.18f),
             PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.18f)
         ).apply {
@@ -590,16 +628,14 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             repeatMode = ValueAnimator.REVERSE
             start()
         }
-        sinhalaButton.background = rounded(orangeLight, dp(20), orange, strokeDp = 2)
     }
 
     private fun stopSinhalaPulse() {
         sinhalaPulse?.cancel()
         sinhalaPulse = null
-        if (::sinhalaButton.isInitialized) {
-            sinhalaButton.scaleX = 1f
-            sinhalaButton.scaleY = 1f
-            if (!sinhalaHeld) setSinhalaLook(false)
+        if (::langSwitch.isInitialized) {
+            langSwitch.scaleX = 1f
+            langSwitch.scaleY = 1f
         }
     }
 
@@ -640,6 +676,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         val service = SpeechLoop.googleService(this)?.packageName ?: "phone default (Google not found)"
         box.addView(label("Speech recognition: $service", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
+        box.addView(label("Voices: Sam = ${voice.voiceName(Characters.SAM)} · Maya = ${voice.voiceName(Characters.MAYA)}", 12f, muted))
         box.addView(label("App version ${BuildConfig.VERSION_NAME}", 12f, muted))
         box.addView(label("Updates: ${prefs.getString("updateLast", "not checked yet")}", 12f, muted))
         updater.check(force = true)
@@ -702,10 +739,10 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         scroll.addView(messages)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // Bottom: nudge line, his live words (grey italics, read-only), then the pill bar
+        // Bottom: nudge line, his live words (grey italics, read-only), ✕ Discard, Undo, then the pill bar
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(4), dp(12), dp(14))
+            setPadding(dp(12), dp(4), dp(12), dp(12))
         }
         nudgeText = label("", 13.5f, orangeDark, bold = true).apply {
             gravity = Gravity.CENTER
@@ -723,43 +760,60 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         bottom.addView(liveText)
 
+        // ✕ Discard sits above the bar, away from the EN | සිං switch
+        discardChip = label("✕  Discard", 13f, muted, bold = true).apply {
+            background = rippled(rounded(Color.WHITE, dp(14), line), dp(14))
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            visibility = View.GONE
+            setOnClickListener { tap(it); onDiscardTap() }
+        }
+        bottom.addView(discardChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6); bottomMargin = dp(8) })
+
+        undoBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(ink, dp(12), null)
+            setPadding(dp(14), dp(4), dp(6), dp(4))
+            visibility = View.GONE
+        }
+        undoBar.addView(label("Your words were discarded", 14.5f, Color.WHITE), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        undoBar.addView(label("UNDO", 14.5f, Color.parseColor("#7FD6CF"), bold = true).apply {
+            gravity = Gravity.CENTER
+            minHeight = dp(40); setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener { tap(it); onUndoTap() }
+        })
+        bottom.addView(undoBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+
         val pill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(Color.WHITE, dp(34), line)
+            background = rounded(Color.WHITE, dp(36), line)
             elevation = dp(3).toFloat()
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            minimumHeight = dp(68)
+            minimumHeight = dp(72)
         }
 
-        cancelButton = IconButton(this, Glyph.CLOSE, Color.TRANSPARENT, muted).apply {
-            setOnClickListener { tap(it); onCancelTap() }
+        // EN | සිං switch: one tap; as big as the mic
+        langSwitch = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(Color.WHITE, dp(24), orange, strokeDp = 2)
+            setPadding(dp(2), dp(2), dp(2), dp(2))
         }
-        pill.addView(cancelButton, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(2) })
-
-        sinhalaButton = label("සිං", 15f, orangeDark, bold = true).apply {
+        enSide = label("EN", 15f, muted, bold = true).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(12), 0, dp(12), 0)
-            minWidth = dp(52)
+            setOnClickListener { tap(it); onSwitchTap(false) }
         }
-        setSinhalaLook(false)
-        sinhalaButton.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); onSinhalaDown() }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onSinhalaUp()
-            }
-            true
+        siSide = label("සිං", 19f, orangeDark, bold = true).apply {
+            gravity = Gravity.CENTER
+            setOnClickListener { tap(it); onSwitchTap(true) }
         }
-        pill.addView(sinhalaButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { marginEnd = dp(8) })
+        langSwitch.addView(enSide, LinearLayout.LayoutParams(dp(54), dp(46)))
+        langSwitch.addView(siSide, LinearLayout.LayoutParams(dp(54), dp(46)))
+        pill.addView(langSwitch, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(10) })
 
         val middle = FrameLayout(this)
-        waitingLine = TextView(this).apply {
-            textSize = 13.5f
-            setTextColor(muted)
-            text = instructionLine()
-            setLineSpacing(dp(2).toFloat(), 1f)
-        }
-        middle.addView(waitingLine, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL))
+        spacer = View(this)
+        middle.addView(spacer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)))
         bars = SoundBarsView(this)
         middle.addView(bars, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34), Gravity.CENTER_VERTICAL))
         statusLine = label("", 13.5f, teal, bold = true)
@@ -769,81 +823,91 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         pauseButton = IconButton(this, Glyph.PAUSE, tealLight, teal).apply {
             setOnClickListener { tap(it); onPauseTap() }
         }
-        pill.addView(pauseButton, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginStart = dp(6) })
+        pauseBox = labelled(pauseButton, dp(42), "pause")
+        pill.addView(pauseBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
 
         micButton = IconButton(this, Glyph.MIC, teal, Color.WHITE).apply {
             setOnClickListener { tap(it); onMicTap() }
         }
-        pill.addView(micButton, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginStart = dp(6) })
+        pill.addView(micButton, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginStart = dp(6) })
 
         sendButton = IconButton(this, Glyph.SEND, orange, Color.WHITE).apply {
             setOnClickListener { tap(it); onSendTap() }
         }
-        pill.addView(sendButton, LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginStart = dp(6) })
+        sendBox = labelled(sendButton, dp(46), "send")
+        pill.addView(sendBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(6) })
 
         bottom.addView(pill)
         root.addView(bottom)
+
+        // Keep the app clear of the status bar and the navigation bar (Android 15 draws edge to edge).
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val sys = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(android.view.WindowInsets.Type.systemBars()) else null
+            @Suppress("DEPRECATION")
+            v.setPadding(0, sys?.top ?: insets.systemWindowInsetTop, 0, sys?.bottom ?: insets.systemWindowInsetBottom)
+            insets
+        }
         setContentView(root)
+        setSinhala(false)
     }
 
-    /** "Tap [mic] for English, or hold [සිං] for Sinhala." with small pictures of the buttons. */
-    private fun instructionLine(): CharSequence {
-        val sb = SpannableStringBuilder("Tap ")
-        val align = if (Build.VERSION.SDK_INT >= 29) DynamicDrawableSpan.ALIGN_CENTER else DynamicDrawableSpan.ALIGN_BOTTOM
-        val mic = MicPicture(dp(22), teal).apply { setBounds(0, 0, dp(22), dp(22)) }
-        sb.append(" ")
-        sb.setSpan(ImageSpan(mic, align), sb.length - 1, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        sb.append(" for English, or hold ")
-        val chip = SinhalaPicture(dp(22), orangeLight, orange, orangeDark).apply { setBounds(0, 0, intrinsicWidth, dp(22)) }
-        sb.append(" ")
-        sb.setSpan(ImageSpan(chip, align), sb.length - 1, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        sb.append(" for Sinhala.")
-        return sb
+    /** An icon button with a small word under it ("pause", "send"). */
+    private fun labelled(button: View, size: Int, word: String): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(button, LinearLayout.LayoutParams(size, size))
+            addView(label(word, 11f, muted, bold = true).apply { gravity = Gravity.CENTER })
+        }
+
+    private fun rippled(bg: android.graphics.drawable.Drawable, radius: Int): android.graphics.drawable.Drawable {
+        val mask = GradientDrawable().apply { cornerRadius = radius.toFloat(); setColor(Color.WHITE) }
+        return RippleDrawable(ColorStateList.valueOf(Color.parseColor("#330F6B6B")), bg, mask)
     }
 
     // ---- bar states ----
 
     private fun showIdle() {
         liveText.visibility = View.GONE
-        cancelButton.visibility = View.GONE
-        waitingLine.visibility = View.VISIBLE
+        discardChip.visibility = View.GONE
+        spacer.visibility = View.VISIBLE
         bars.visibility = View.GONE
         bars.reset()
         statusLine.visibility = View.GONE
-        pauseButton.visibility = View.GONE
+        pauseBox.visibility = View.GONE
         micButton.visibility = View.VISIBLE
-        sendButton.visibility = View.GONE
+        sendBox.visibility = View.GONE
         setButtonsBusy(waitingReply)
     }
 
     private fun showRecording() {
         liveText.visibility = View.VISIBLE
-        cancelButton.visibility = View.VISIBLE
-        waitingLine.visibility = View.GONE
+        discardChip.visibility = View.VISIBLE
+        spacer.visibility = View.GONE
         bars.visibility = View.GONE
-        bars.color = if (sinhalaHeld) orange else teal
-        statusLine.text = "Getting ready…"
-        statusLine.setTextColor(teal)
+        bars.color = if (sinhalaOn) orange else teal
+        statusLine.text = if (sinhalaOn) "Getting ready (Sinhala)…" else "Getting ready…"
+        statusLine.setTextColor(if (sinhalaOn) orange else teal)
         statusLine.visibility = View.VISIBLE
-        pauseButton.visibility = View.VISIBLE
+        pauseBox.visibility = View.VISIBLE
         pauseButton.isEnabled = true
         micButton.visibility = View.GONE
-        sendButton.visibility = View.VISIBLE
+        sendBox.visibility = View.VISIBLE
         sendButton.isEnabled = true
     }
 
     private fun showPaused() {
         liveText.visibility = View.VISIBLE
-        cancelButton.visibility = View.VISIBLE
-        waitingLine.visibility = View.GONE
+        discardChip.visibility = View.VISIBLE
+        spacer.visibility = View.GONE
         bars.visibility = View.GONE
         statusLine.text = "Paused · tap the mic to go on"
         statusLine.setTextColor(muted)
         statusLine.visibility = View.VISIBLE
-        pauseButton.visibility = View.GONE
+        pauseBox.visibility = View.GONE
         micButton.visibility = View.VISIBLE
         micButton.isEnabled = true
-        sendButton.visibility = View.VISIBLE
+        sendBox.visibility = View.VISIBLE
         sendButton.isEnabled = true
         refreshLive()
     }
@@ -857,18 +921,22 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         sendButton.isEnabled = false
     }
 
-    /** While the partner is thinking, the mic and සිං are visibly greyed out. */
+    /** While the partner is thinking, the mic and the switch are visibly greyed out. */
     private fun setButtonsBusy(busy: Boolean) {
         if (!::micButton.isInitialized) return
         micButton.isEnabled = !busy
-        sinhalaButton.alpha = if (busy) 0.35f else 1f
-        waitingLine.alpha = if (busy) 0.5f else 1f
+        langSwitch.alpha = if (busy) 0.35f else 1f
     }
 
-    private fun setSinhalaLook(held: Boolean) {
-        sinhalaButton.background = if (held) rounded(orange, dp(20), orange) else rounded(orangeLight, dp(20), orange)
-        sinhalaButton.setTextColor(if (held) Color.WHITE else orangeDark)
-        if (::bars.isInitialized) bars.color = if (held) orange else teal
+    /** Lights EN (teal) or සිං (orange). */
+    private fun setSinhala(on: Boolean) {
+        sinhalaOn = on
+        if (!::enSide.isInitialized) return
+        enSide.background = if (!on) rounded(teal, dp(22), null) else null
+        enSide.setTextColor(if (!on) Color.WHITE else muted)
+        siSide.background = if (on) rounded(orange, dp(22), null) else rounded(orangeLight, dp(22), null)
+        siSide.setTextColor(if (on) Color.WHITE else orangeDark)
+        if (::bars.isInitialized) bars.color = if (on) orange else teal
     }
 
     private fun refreshLive() {
@@ -886,11 +954,95 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             if (sb.isNotEmpty()) sb.append(" ")
             val start = sb.length
             sb.append(partial)
-            if (sinhalaHeld) sb.setSpan(ForegroundColorSpan(orangeDark), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (sinhalaOn) sb.setSpan(ForegroundColorSpan(orangeDark), start, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         // Show the end of what he said if it gets long (the full text goes into his bubble).
         val shown: CharSequence = if (sb.length > 260) SpannableStringBuilder("…").append(sb.subSequence(sb.length - 260, sb.length)) else sb
         liveText.text = if (sb.isEmpty()) "Say something…" else shown
+    }
+
+    // ---- Sinhala → English card ----
+
+    private fun addCoachCard(r: GeminiClient.Reply) {
+        // An earlier card he never tried is saved for later practice.
+        openCoach?.let { saveForLater(it); it.footer.text = "Saved: practise it later in \"Say them again\""; styleFooter(it.footer, "later") }
+        val sentence = r.coachSentence.ifBlank { r.coachEn }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(Color.WHITE, dp(16), orange, strokeDp = 2)
+            setPadding(dp(13), dp(10), dp(13), dp(11))
+        }
+        card.addView(label("YOUR SINHALA IN ENGLISH", 11f, orangeDark, bold = true).apply { letterSpacing = 0.06f })
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        row.addView(label(r.coachSi, 17f, orangeDark).apply {
+            background = rounded(orangeLight, dp(8), null)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+        })
+        row.addView(label("  →  ", 18f, orange, bold = true))
+        row.addView(label(r.coachEn.ifBlank { sentence }, 16.5f, ink, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(row)
+        if (sentence.isNotBlank() && sentence != r.coachEn) {
+            val full = SpannableStringBuilder("Whole sentence: ")
+            val st = full.length
+            full.append("\"").append(sentence).append("\"")
+            full.setSpan(ForegroundColorSpan(teal), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            full.setSpan(android.text.style.StyleSpan(Typeface.BOLD), st, full.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            card.addView(label("", 14.5f, ink).apply { text = full; setPadding(0, dp(8), 0, 0) })
+        }
+        val footer = label("🎤  Your turn: say it in English", 13.5f, teal, bold = true)
+        styleFooter(footer, "turn")
+        card.addView(footer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(9) })
+        addToMessages(card, Gravity.START, fullWidth = true)
+        openCoach = CoachCard(r.coachSi, r.coachEn, sentence, footer)
+        logCoach(r.coachSi, r.coachEn, sentence)
+    }
+
+    private fun styleFooter(v: TextView, kind: String) {
+        when (kind) {
+            "turn" -> { v.background = rounded(tealLight, dp(12), null); v.setTextColor(teal) }
+            "done" -> { v.background = rounded(Color.parseColor("#E5F4E8"), dp(12), null); v.setTextColor(Color.parseColor("#1F7A3A")) }
+            else -> { v.background = rounded(Color.parseColor("#F1EFE9"), dp(12), null); v.setTextColor(muted) }
+        }
+        v.setPadding(dp(10), dp(5), dp(10), dp(5))
+    }
+
+    /** After his next turn: did he say the English himself? */
+    private fun settleCoach(said: List<Pair<String, Boolean>>) {
+        val c = openCoach ?: return
+        openCoach = null
+        val english = said.filter { !it.second }.joinToString(" ") { it.first }
+        if (saidIt(english, c.sentence) || (c.en.isNotBlank() && saidIt(english, c.en))) {
+            c.footer.text = "✓  You said it in English!"
+            styleFooter(c.footer, "done")
+        } else {
+            c.footer.text = "Saved: practise it later in \"Say them again\""
+            styleFooter(c.footer, "later")
+            saveForLater(c)
+        }
+    }
+
+    /** Most of the target words appear in what he said (speech recognition is never perfect). */
+    private fun saidIt(heard: String, target: String): Boolean {
+        fun words(t: String) = t.lowercase().replace(Regex("[^a-z' ]"), " ").split(" ").filter { it.length > 1 }
+        val want = words(target).toSet()
+        if (want.isEmpty()) return false
+        val got = words(heard).toSet()
+        return want.count { it in got } >= (want.size * 0.7).toInt().coerceAtLeast(1)
+    }
+
+    /** Every card is logged (for the gap finder later); missed ones also go to "Say them again". */
+    private fun logCoach(si: String, en: String, sentence: String) = appendJson("coachLog", si, en, sentence)
+    private fun saveForLater(c: CoachCard) = appendJson("sayThemAgain", c.si, c.en, c.sentence)
+
+    private fun appendJson(key: String, si: String, en: String, sentence: String) {
+        val arr = runCatching { org.json.JSONArray(prefs.getString(key, "[]")) }.getOrDefault(org.json.JSONArray())
+        arr.put(JSONObject().put("si", si).put("en", en).put("sentence", sentence).put("at", System.currentTimeMillis()))
+        while (arr.length() > 300) arr.remove(0)
+        prefs.edit().putString(key, arr.toString()).apply()
     }
 
     private fun addMyBubble(said: List<Pair<String, Boolean>>) {
