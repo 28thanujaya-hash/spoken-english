@@ -170,6 +170,17 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             startChat()
         }
         voice.expressive = prefs.getBoolean("expressive", true)
+        // The face follows each sentence's tone while it is spoken.
+        voice.onLineStart = { tone ->
+            if (!laughing) face.mood = when (tone) {
+                "excited", "happy", "warm", "kind", "joke" -> "happy"
+                "surprised" -> "surprised"
+                "sad", "sorry" -> "sad"
+                "annoyed" -> "annoyed"
+                "calm", "thinking", "curious" -> "thinking"
+                else -> "neutral"
+            }
+        }
         voice.onSpeaking = { talking ->
             partnerTalking = talking
             face.talking = talking

@@ -24,6 +24,9 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
 
     var onSpeaking: ((Boolean) -> Unit)? = null
 
+    /** Called as each sentence starts, with its tone (the face follows it). */
+    var onLineStart: ((String) -> Unit)? = null
+
     /** Set from ⚙ ("Expressive voice"); on by default. */
     var expressive = true
 
@@ -34,6 +37,8 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
     private var lastLines: List<Line> = emptyList()
     private var lastCharacter: Character? = null
     @Volatile private var lastId = ""
+    @Volatile private var runPrefix = ""
+    @Volatile private var runLines: List<Line> = emptyList()
     private var seq = 0
     private lateinit var tts: TextToSpeech
 
@@ -44,7 +49,12 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
                 tts.language = Locale.US
                 tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
-                        main.post { onSpeaking?.invoke(true) }
+                        val tone = utteranceId?.takeIf { it.startsWith(runPrefix) }
+                            ?.removePrefix(runPrefix)?.toIntOrNull()?.let { runLines.getOrNull(it)?.tone }
+                        main.post {
+                            onSpeaking?.invoke(true)
+                            if (tone != null) onLineStart?.invoke(tone)
+                        }
                     }
 
                     override fun onDone(utteranceId: String?) {
@@ -91,10 +101,13 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         lastCharacter = character
         chooseVoice(character)
         val run = "u${++seq}-"
+        runPrefix = run
+        runLines = lines
+        val pace = character.pace
         if (!expressive) {
             lastId = run + "all"
             tts.setPitch(1.0f)
-            tts.setSpeechRate(BASE_RATE)
+            tts.setSpeechRate(BASE_RATE * pace)
             tts.speak(lines.joinToString(" ") { it.text }, TextToSpeech.QUEUE_FLUSH, null, lastId)
             return
         }
@@ -102,11 +115,13 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         lines.forEachIndexed { i, line ->
             val (pitch, rate) = shape(line.tone)
             tts.setPitch(pitch)                 // captured per sentence when it is queued
-            tts.setSpeechRate(BASE_RATE * rate)
-            tts.speak(line.text, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, run + i)
+            tts.setSpeechRate(BASE_RATE * rate * pace)
+            val params = android.os.Bundle().apply {
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, loudness(line.tone))
+            }
+            tts.speak(line.text, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, params, run + i)
             if (i < lines.size - 1) {
-                val pause = if (isInterjection(line.text)) 120L else 220L
-                tts.playSilentUtterance(pause, TextToSpeech.QUEUE_ADD, run + "p" + i)
+                tts.playSilentUtterance(pauseAfter(line, lines[i + 1]), TextToSpeech.QUEUE_ADD, run + "p" + i)
             }
         }
         tts.setPitch(1.0f)
@@ -124,6 +139,28 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         "sad", "sorry" -> 0.93f to 0.90f
         "annoyed" -> 0.96f to 1.04f
         else -> 1.00f to 1.00f
+    }
+
+    /** Louder for excitement, softer for calm or sad (1.0 = full). */
+    private fun loudness(tone: String): Float = when (tone.lowercase()) {
+        "excited", "happy", "joke", "surprised", "annoyed" -> 1.0f
+        "question" -> 0.95f
+        "curious" -> 0.92f
+        "warm", "kind" -> 0.88f
+        "calm", "thinking" -> 0.84f
+        "sad", "sorry" -> 0.80f
+        else -> 0.92f
+    }
+
+    /** Pauses like a person: short after "Oh!", a thinking pause after "Hmm", a breath before a question. */
+    private fun pauseAfter(line: Line, next: Line): Long {
+        val t = line.text.trim().lowercase()
+        return when {
+            t.startsWith("hmm") || t.startsWith("um") || t.endsWith("...") || t.endsWith("…") -> 380L
+            isInterjection(line.text) -> 140L
+            next.text.trim().endsWith("?") -> 300L
+            else -> 220L
+        }
     }
 
     private fun isInterjection(t: String): Boolean =

@@ -14,7 +14,9 @@ class Character(
     val persona: String,
     val openers: List<String>,
     /** Short real laugh played when the reply has "laugh": true (null = laughing face only). */
-    val laughClip: Int? = null
+    val laughClip: Int? = null,
+    /** Own speaking pace (1.0 = normal): Sam a little quicker, Maya a little calmer. */
+    val pace: Float = 1.0f
 )
 
 object Characters {
@@ -29,6 +31,9 @@ object Characters {
         - NEVER write laughs or sounds in the reply: no "haha", "hehe", "lol", "*laughs*", no emojis. The reply is read
           aloud by a voice that would say them like words. When you would laugh, set "laugh": true instead
           (the app plays a real laugh first). Laugh only when something is really funny, not every time.
+        - Talk like a real person in a relaxed chat, not like a book: contractions (I'm, don't, that's), short
+          sentences, and natural spoken words where they fit ("Oh!", "Hmm...", "Well,", "You know what?",
+          "Wait, really?"). Don't overdo them: one or two per reply.
         - React first (Oh! / Really? / Oh no! / Wow! / No way!), add something about yourself, then usually ask him
           something back. About one reply in four, make a remark that is not a question, so he learns to respond to remarks.
         - If his answer is very short (1 to 3 words), react to it warmly, then ask an easy follow-up that invites a
@@ -81,7 +86,8 @@ object Characters {
             "Hey, are you a movie fan?",
             "Hi! You must be new in this class.",
             "Hannibal again? Aren't you scared?"
-        )
+        ),
+        pace = 1.05f
     )
 
     val MAYA = Character(
@@ -103,7 +109,8 @@ object Characters {
             "You look tired today!",
             "Still watching Marvel? Batman is better!"
         ),
-        laughClip = R.raw.maya_laugh   // CC0, lmbubec (Freesound 119450, via Wikimedia Commons)
+        laughClip = R.raw.maya_laugh,  // CC0, lmbubec (Freesound 119450, via Wikimedia Commons)
+        pace = 0.96f
     )
 
     /** Grammar rules for the strictness level (1 relaxed … 4 focused); added to the system prompt. */
