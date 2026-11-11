@@ -33,6 +33,28 @@ class FaceView(ctx: Context) : View(ctx) {
             if (value) ticker.post(mouthTick) else { mouthOpen = 0f; invalidate() }
         }
 
+    /** Laughing: eyes squint, big open smile, head bobs. Set while the laugh plays. */
+    var laughing: Boolean = false
+        set(value) {
+            field = value
+            ticker.removeCallbacks(laughTick)
+            bob = 0f
+            if (value) { laughStart = android.os.SystemClock.uptimeMillis(); ticker.post(laughTick) }
+            invalidate()
+        }
+
+    private var bob = 0f
+    private var laughStart = 0L
+    private val laughTick = object : Runnable {
+        override fun run() {
+            if (!laughing) return
+            val t = (android.os.SystemClock.uptimeMillis() - laughStart) / 1000f
+            bob = kotlin.math.abs(kotlin.math.sin(t * 2f * Math.PI.toFloat() * 3.2f))
+            invalidate()
+            ticker.postDelayed(this, 33)
+        }
+    }
+
     private var mouthOpen = 0f
     private var blinking = false
     private val ticker = Handler(Looper.getMainLooper())
@@ -86,6 +108,9 @@ class FaceView(ctx: Context) : View(ctx) {
         fill.color = Color.parseColor("#E3F1EF")
         c.drawCircle(cx, h / 2f, min(w, h) * 0.48f, fill)
 
+        c.save()
+        if (laughing) c.translate(0f, -r * 0.07f * bob)
+
         // Long hair behind the head
         if (ch.longHair) {
             fill.color = ch.hair
@@ -107,7 +132,16 @@ class FaceView(ctx: Context) : View(ctx) {
         // Eyes
         val eyeY = cy + r * 0.02f
         val eyeDx = r * 0.36f
-        if (blinking) {
+        if (laughing) {
+            // Squinting "^ ^" eyes
+            line.strokeWidth = r * 0.055f
+            for (ex in listOf(cx - eyeDx, cx + eyeDx)) {
+                path.reset()
+                path.moveTo(ex - r * 0.11f, eyeY + r * 0.03f)
+                path.quadTo(ex, eyeY - r * 0.12f, ex + r * 0.11f, eyeY + r * 0.03f)
+                c.drawPath(path, line)
+            }
+        } else if (blinking) {
             line.strokeWidth = r * 0.05f
             c.drawLine(cx - eyeDx - r * 0.08f, eyeY, cx - eyeDx + r * 0.08f, eyeY, line)
             c.drawLine(cx + eyeDx - r * 0.08f, eyeY, cx + eyeDx + r * 0.08f, eyeY, line)
@@ -119,7 +153,7 @@ class FaceView(ctx: Context) : View(ctx) {
         }
 
         // Eyebrows: (inner, outer) vertical offsets as a fraction of r; negative = higher
-        val (leftIn, leftOut, rightIn, rightOut) = when (mood) {
+        val (leftIn, leftOut, rightIn, rightOut) = if (laughing) listOf(-0.08f, -0.05f, -0.08f, -0.05f) else when (mood) {
             "surprised" -> listOf(-0.10f, -0.10f, -0.10f, -0.10f)
             "annoyed" -> listOf(0.06f, -0.04f, 0.06f, -0.04f)
             "sad" -> listOf(-0.07f, 0.04f, -0.07f, 0.04f)
@@ -134,7 +168,14 @@ class FaceView(ctx: Context) : View(ctx) {
         // Mouth
         val my = cy + r * 0.45f
         line.strokeWidth = r * 0.06f
-        if (talking) {
+        if (laughing) {
+            // Wide open laughing mouth (half moon), opening a little with each bob
+            fill.color = Color.parseColor("#5A1E1E")
+            val mh = r * (0.20f + 0.08f * bob)
+            c.drawArc(cx - r * 0.32f, my - mh * 0.6f, cx + r * 0.32f, my + mh, 0f, 180f, true, fill)
+            fill.color = Color.WHITE
+            c.drawRect(cx - r * 0.22f, my - r * 0.01f, cx + r * 0.22f, my + r * 0.05f, fill)
+        } else if (talking) {
             fill.color = Color.parseColor("#5A1E1E")
             val mh = r * (0.06f + 0.22f * mouthOpen)
             c.drawOval(cx - r * 0.22f, my - mh / 2f, cx + r * 0.22f, my + mh / 2f, fill)
@@ -149,6 +190,7 @@ class FaceView(ctx: Context) : View(ctx) {
                 else -> { path.moveTo(cx - r * 0.24f, my); path.quadTo(cx, my + r * 0.1f, cx + r * 0.24f, my); c.drawPath(path, line) }
             }
         }
+        c.restore()
     }
 
     companion object {

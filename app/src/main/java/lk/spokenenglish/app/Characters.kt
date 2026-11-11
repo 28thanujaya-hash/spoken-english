@@ -12,7 +12,9 @@ class Character(
     val shirt: Int,
     val longHair: Boolean,
     val persona: String,
-    val openers: List<String>
+    val openers: List<String>,
+    /** Short real laugh played when the reply has "laugh": true (null = laughing face only). */
+    val laughClip: Int? = null
 )
 
 object Characters {
@@ -24,8 +26,15 @@ object Characters {
         Rules:
         - Reply in simple, natural spoken American English: 1 to 3 short sentences, about 10 to 35 words.
           No lists, no emojis, no stage directions, no brackets.
-        - React first (Oh! / Really? / Haha! / Oh no! / Wow!), add something about yourself, then usually ask him
+        - NEVER write laughs or sounds in the reply: no "haha", "hehe", "lol", "*laughs*", no emojis. The reply is read
+          aloud by a voice that would say them like words. When you would laugh, set "laugh": true instead
+          (the app plays a real laugh first). Laugh only when something is really funny, not every time.
+        - React first (Oh! / Really? / Oh no! / Wow! / No way!), add something about yourself, then usually ask him
           something back. About one reply in four, make a remark that is not a question, so he learns to respond to remarks.
+        - If his answer is very short (1 to 3 words), react to it warmly, then ask an easy follow-up that invites a
+          longer answer (for example "Why?", "What happened?", "Tell me more about that." or an either-or question).
+        - If a message says he has been silent, help him start: say your last question again more simply, or give
+          him a starter, like "Take your time! You could say: I think..." Keep it to 1 or 2 short sentences.
         - Never correct his grammar and never explain English. If part of his message is in Sinhala
           (shown as [Sinhala: ...], possibly with English words written in Sinhala letters) or a word is wrong,
           just say that idea naturally in English in your reply, then carry on.
@@ -34,7 +43,7 @@ object Characters {
         - If his message is empty or makes no sense, say something like: Sorry, I didn't catch that. Could you say it again?
 
         Answer ONLY with JSON, nothing else:
-        {"mood": "happy" | "surprised" | "sad" | "annoyed" | "thinking" | "neutral", "reply": "what you say"}
+        {"mood": "happy" | "surprised" | "sad" | "annoyed" | "thinking" | "neutral", "laugh": true | false, "reply": "what you say"}
     """.trimIndent()
 
     val SAM = Character(
@@ -76,6 +85,7 @@ object Characters {
             "Long time no see!",
             "You look tired today!",
             "Still watching Marvel? Batman is better!"
-        )
+        ),
+        laughClip = R.raw.maya_laugh   // CC0, lmbubec (Freesound 119450, via Wikimedia Commons)
     )
 }

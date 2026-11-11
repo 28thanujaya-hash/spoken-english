@@ -1,16 +1,18 @@
-# Spoken English: test version 0.1
+# Spoken English: test version 0.3
 
 A small test app to try the risky parts on the Galaxy A34 before building the whole course:
 
 - A free conversation with **Sam or Maya** (the app chooses, about half each)
-- **Talk → Stop** button, with moving sound bars and a timer
-- His words appear in the **"So far" box at every pause**; the recording keeps going until **Stop**
-- **Sinhala button, press and hold** (Sinhala while held, English again when released)
-- Speech to text by **Google on the phone** (works offline when the languages are downloaded)
-- Replies by **Gemini** (free key), with a **mood**
-- Characters speak with **Google's voice** on the phone; Sam male, Maya female
-- A simple **drawn face** that changes with the mood and moves its mouth while speaking
-- Each reply shows **how many seconds** it took
+- **Claude-style talk bar:** waiting = **සිං** + "Tap [mic] for English, or hold [සිං] for Sinhala." + mic;
+  talking = **✕** cancel · **සිං** · sound bars · **■** pause · orange **↑** send
+- His words appear live in **grey italics** above the bar and add up at each pause; **never editable**
+- **■ pause** keeps the words; tap the mic to go on (new words are added after); **↑** sends everything
+- **සිං = press, talk, let go:** if the turn started with සිං, letting go sends it; held mid-sentence, letting go goes back to English
+- Mic shows **"Getting ready…"** until it really listens, then a short **buzz**; every button ripples and ticks when touched; mic and සිං are greyed out while the partner thinks
+- **Nudges:** silent 8 s after the partner speaks → the partner helps by voice; 8 s more → "Stuck? Hold සිං" and the සිං button pulses; 6 s of silence while recording → an on-screen "Take your time" line
+- Replies by **Gemini 3.5 Flash Lite** (free, 500 a day); if it hits its limit the app quietly uses Gemini 3.8 Flash (20 a day); a limit error is never shown raw
+- **Laughs:** the partner never says "haha"; a laughing face (and for Maya a real 1-second laugh) plays first, then the voice
+- ⚙ shows **which model actually answered**, any model resting after a limit, and the last problem
 
 Not in this test: lessons, drills, scoring, the other screens, shake-to-report.
 
@@ -38,26 +40,30 @@ Every time the files change on GitHub, a new APK is built automatically (step 6 
 - **Offline speech:** already checked: English and Sinhala voice typing work offline.
 - Allow the **microphone** when the app asks.
 
-## What to test and report
+## What to test and report (v0.3)
 
-1. Does the text appear in the "So far" box at each pause, and does it keep listening until Stop?
-2. Do any words get lost between pauses? Is there a beep at each pause?
-3. Hold **Sinhala** in the middle of a sentence: does the Sinhala part appear correctly (highlighted)?
-4. Seconds per reply (shown under each reply). Do Sam and Maya sound different?
-5. Do the replies feel natural? Do they turn his Sinhala into English naturally?
-6. Try with mobile data off (Wi-Fi off too): speech to text should still work; replies will not.
+1. **Speed of buttons:** does every button react at once (ripple + tick)? Does the mic show "Getting ready…" then buzz when it listens?
+2. **Talk bar:** ✕ throws the turn away; ■ pauses (words stay); mic continues (new words after); ↑ sends.
+3. **සිං:** hold from the start, talk Sinhala, let go → it sends by itself. Hold in the middle of English → let go → English continues until ↑.
+4. **Nudges:** stay silent after Sam/Maya speaks: after ~8 s they help you; ~8 s later the hint + pulsing සිං. Stop talking while recording for 6 s: "Take your time".
+5. **Short answers:** answer "Yes." or "Fine." → does the partner ask something that invites a longer answer?
+6. **Laughs:** say something funny: no "haha" read out; laughing face; Maya's laugh sound.
+7. **Speed of replies** (seconds under each reply) and ⚙ › "Last reply came from".
+8. Any words lost between pauses? Any beep at each pause?
 
-Shake the phone? Not in this version. Send notes and screenshots to Claude.
+Send notes and screenshots to Claude.
 
 ## Files (for later)
 
 - `app/src/main/java/lk/spokenenglish/app/`
   - `MainActivity.kt`: the screen and the conversation flow
-  - `SpeechLoop.kt`: Google speech to text, restarting at each pause until Stop; Sinhala while held
-  - `GeminiClient.kt`: the Gemini reply (default model `gemini-flash-latest`; changeable with ⚙)
+  - `SpeechLoop.kt`: Google speech to text, restarting at each pause until ■ or ↑; Sinhala while held
+  - `GeminiClient.kt`: the Gemini reply (default `gemini-flash-lite-latest`, backup `gemini-flash-latest`; changeable with ⚙); removes laughs/emojis from the spoken text
   - `CharacterVoice.kt`: Google voices (male for Sam, female for Maya)
   - `FaceView.kt`: the drawn face and moods
   - `SoundBarsView.kt`: the sound bars
+  - `Icons.kt`: round icon buttons (mic, ■, ↑, ✕) and the small pictures in the instruction line
+- `app/src/main/res/raw/maya_laugh.ogg`: Maya's laugh (CC0, lmbubec, Freesound 119450 via Wikimedia Commons)
   - `Characters.kt`: Sam and Maya: personality, rules for replies, opening lines
 - `.github/workflows/build.yml`: GitHub builds the APK
 - `app/debug.keystore`: fixed test key so new versions install over old ones (test only)

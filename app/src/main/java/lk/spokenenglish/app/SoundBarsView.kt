@@ -7,11 +7,16 @@ import android.graphics.Paint
 import android.view.View
 import kotlin.math.max
 
-/** Moving sound bars while he talks (like Claude's voice mode). */
+/** A dense row of thin scrolling sound bars while he talks (like Claude's voice input). */
 class SoundBarsView(ctx: Context) : View(ctx) {
 
-    private val levels = FloatArray(24)
+    private val levels = FloatArray(44)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0F6B6B") }
+
+    /** Teal for English, orange while the Sinhala button is held. */
+    var color: Int
+        get() = paint.color
+        set(value) { paint.color = value; invalidate() }
 
     /** rmsDb from the speech recogniser, roughly -2 (quiet) to 10 (loud). */
     fun push(rmsDb: Float) {
@@ -30,9 +35,9 @@ class SoundBarsView(ctx: Context) : View(ctx) {
         super.onDraw(c)
         val n = levels.size
         val slot = width / n.toFloat()
-        val bw = slot * 0.5f
+        val bw = max(2f, slot * 0.42f)
         for (i in 0 until n) {
-            val bh = max(height * 0.14f, levels[i] * height)
+            val bh = max(height * 0.10f, levels[i] * height)
             val x = i * slot + (slot - bw) / 2f
             val top = (height - bh) / 2f
             c.drawRoundRect(x, top, x + bw, top + bh, bw / 2f, bw / 2f, paint)

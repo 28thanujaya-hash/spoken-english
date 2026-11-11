@@ -16,7 +16,7 @@ import android.speech.SpeechRecognizer
  *
  * Google's recogniser ends by itself whenever he pauses. Each ending is treated as a "pause":
  * the words go to the "So far" box and listening starts again straight away. The turn only
- * ends when stop() is called (the Stop button).
+ * ends when stop() is called (↑ send or ■ pause) or cancel() (✕).
  *
  * English (en-US) normally; Sinhala (si-LK) while the Sinhala button is held.
  */
@@ -28,6 +28,8 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         fun onLevel(rmsDb: Float)
         fun onFinished()
         fun onProblem(message: String)
+        /** The recogniser is really listening now (called at every restart too). */
+        fun onListening()
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -74,6 +76,17 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         } else {
             finish()
         }
+    }
+
+    /** Ends at once without waiting for the last words (✕ cancel). onFinished is NOT called. */
+    fun cancel() {
+        if (!active) return
+        main.removeCallbacks(finishRunnable)
+        main.removeCallbacks(listenRunnable)
+        active = false
+        stopping = false
+        listening = false
+        recognizer?.cancel()
     }
 
     fun destroy() {
@@ -211,7 +224,9 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         if (active) listener.onLevel(rmsdB)
     }
 
-    override fun onReadyForSpeech(params: Bundle?) {}
+    override fun onReadyForSpeech(params: Bundle?) {
+        if (active && !stopping) listener.onListening()
+    }
     override fun onBeginningOfSpeech() {}
     override fun onBufferReceived(buffer: ByteArray?) {}
     override fun onEndOfSpeech() {}
