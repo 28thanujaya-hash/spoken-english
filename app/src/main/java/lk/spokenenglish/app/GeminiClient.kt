@@ -101,8 +101,10 @@ class GeminiClient(private val key: String, private val model: String) {
         if (lead.isNotEmpty()) lines.add(Line(stripSounds(lead), "neutral"))
         found.forEachIndexed { i, m ->
             val end = if (i + 1 < found.size) found[i + 1].range.first else reply.length
-            val t = stripSounds(reply.substring(m.range.last + 1, end).trim())
-            if (t.isNotEmpty()) lines.add(Line(t, m.groupValues[1].lowercase()))
+            val chunk = reply.substring(m.range.last + 1, end).trim()
+            // A mark belongs to ONE sentence; any unmarked sentences after it are neutral.
+            chunk.split(Regex("(?<=[.!?…])\\s+")).map { stripSounds(it.trim()) }.filter { it.isNotEmpty() }
+                .forEachIndexed { k, sentence -> lines.add(Line(sentence, if (k == 0) m.groupValues[1].lowercase() else "neutral")) }
         }
         return plain to lines
     }

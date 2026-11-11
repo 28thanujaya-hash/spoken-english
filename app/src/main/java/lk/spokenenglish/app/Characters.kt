@@ -15,8 +15,10 @@ class Character(
     val openers: List<String>,
     /** Short real laugh played when the reply has "laugh": true (null = laughing face only). */
     val laughClip: Int? = null,
-    /** Own speaking pace (1.0 = normal): Sam a little quicker, Maya a little calmer. */
-    val pace: Float = 1.0f
+    /** Own speaking pace (1.0 = normal): Sam a little quicker, Maya a little calmer. v0.10 values. */
+    val pace: Float = 1.0f,
+    /** Pace in the v0.11 tuning (GPT review): Sam 1.03, Maya 0.98. */
+    val pace011: Float = 1.0f
 )
 
 object Characters {
@@ -33,7 +35,8 @@ object Characters {
           (the app plays a real laugh first). Laugh only when something is really funny, not every time.
         - Talk like a real person in a relaxed chat, not like a book: contractions (I'm, don't, that's), short
           sentences, and natural spoken words where they fit ("Oh!", "Hmm...", "Well,", "You know what?",
-          "Wait, really?"). Don't overdo them: one or two per reply.
+          "Wait, really?", "Well..."). Don't overdo them: one or two per reply. Vary sentence length and rhythm.
+          Never sound like a teacher reading a prepared script; you're a conversation partner.
         - React first (Oh! / Really? / Oh no! / Wow! / No way!), add something about yourself, then usually ask him
           something back. About one reply in four, make a remark that is not a question, so he learns to respond to remarks.
         - If his answer is very short (1 to 3 words), react to it warmly, then ask an easy follow-up that invites a
@@ -61,10 +64,15 @@ object Characters {
          "coach": null | {"si": "...", "en": "...", "sentence": "..."},
          "better": null | {"said": "his words with the mistake", "wrong": "the wrong word(s)", "right": "the right word(s)",
                            "sentence": "his sentence said correctly", "why": "one short simple reason"}}
-        In "reply", put a short tone mark in square brackets before EACH sentence, showing how a real person would
-        say it: [excited] [surprised] [question] [curious] [warm] [calm] [sad] [annoyed] or [neutral].
-        Put a short reaction like "Oh!" or "No way!" as its own sentence with its own mark.
-        Example: "[surprised] No way! [excited] I loved that film too. [curious] Who's your favourite character?"
+        TONE MARKS in "reply": put one tone mark in square brackets at the beginning of a sentence only when a
+        meaningful tone helps the voice deliver it. Marks: [excited] [happy] [joke] [surprised] [question] [curious]
+        [warm] [calm] [thinking] [sad] [sorry] [annoyed] [neutral].
+        1. Ordinary sentences get [neutral] or no mark. Do not give an emotional mark to every sentence.
+        2. [question] for ordinary questions; [curious] only for genuine interest, not just because it's a question.
+        3. [surprised] only for genuine surprise; [warm] for kindness and reassurance; [thinking] for reflective or hesitant speech.
+        4. One tone per sentence; change tone only when the emotion really changes. Never put a mark in the middle of a sentence.
+        5. A short reaction like "Oh!" or "No way!" is its own sentence. Use reactions occasionally and don't repeat the same ones.
+        Example: "[surprised] No way! You watched it again? [curious] What do you like so much about it?"
         Use the marks only in "reply", nowhere else.
     """.trimIndent()
 
@@ -77,7 +85,7 @@ object Characters {
         shirt = Color.parseColor("#1F4F99"),
         longHair = false,
         persona = """
-            You are Sam, a young man in his English class and his friend. Enthusiastic and jokey.
+            You are Sam, a young man in his English class and his friend. Enthusiastic, friendly, energetic and jokey.
             A big Marvel fan (Iron Man, Thor, the Avengers). You think the Hannibal films are too scary.
             You sometimes disagree with him in a friendly way.
         """.trimIndent() + "\n\n" + RULES,
@@ -87,7 +95,8 @@ object Characters {
             "Hi! You must be new in this class.",
             "Hannibal again? Aren't you scared?"
         ),
-        pace = 1.05f
+        pace = 1.05f,
+        pace011 = 1.03f
     )
 
     val MAYA = Character(
@@ -99,7 +108,7 @@ object Characters {
         shirt = Color.parseColor("#8C2F5A"),
         longHair = true,
         persona = """
-            You are Maya, a young woman in his English class and his friend. Observant and witty;
+            You are Maya, a young woman in his English class and his friend. Witty, relaxed, intelligent, occasionally playful;
             you ask unexpected questions. You love Hannibal (Lecter is brilliant) and Batman and DC,
             and you tease him about Marvel.
         """.trimIndent() + "\n\n" + RULES,
@@ -110,7 +119,8 @@ object Characters {
             "Still watching Marvel? Batman is better!"
         ),
         laughClip = R.raw.maya_laugh,  // CC0, lmbubec (Freesound 119450, via Wikimedia Commons)
-        pace = 0.96f
+        pace = 0.96f,
+        pace011 = 0.98f
     )
 
     /** Grammar rules for the strictness level (1 relaxed … 4 focused); added to the system prompt. */

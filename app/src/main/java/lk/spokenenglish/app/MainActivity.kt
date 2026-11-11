@@ -170,6 +170,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             startChat()
         }
         voice.expressive = prefs.getBoolean("expressive", true)
+        voice.tuning = prefs.getString("tuning", "v0.11") ?: "v0.11"
+        voice.baseRate = prefs.getFloat("baseRate", 0.92f)
         // The face follows each sentence's tone while it is spoken.
         voice.onLineStart = { tone ->
             if (!laughing) face.mood = when (tone) {
@@ -744,6 +746,21 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             isChecked = prefs.getBoolean("expressive", true)
         }
         box.addView(expressiveBox)
+        val tuningBox = android.widget.CheckBox(this).apply {
+            text = "Use the older v0.10 voice numbers (to compare)"
+            isChecked = prefs.getString("tuning", "v0.11") == "v0.10"
+        }
+        box.addView(tuningBox)
+        val speeds = listOf(0.92f to "Starting (0.92)", 0.96f to "Developing (0.96)", 1.00f to "Comfortable (1.00)")
+        val speedGroup = android.widget.RadioGroup(this)
+        val current = prefs.getFloat("baseRate", 0.92f)
+        speeds.forEachIndexed { i, (v, name) ->
+            speedGroup.addView(android.widget.RadioButton(this).apply {
+                id = 7000 + i; text = name; isChecked = kotlin.math.abs(v - current) < 0.001f
+            })
+        }
+        box.addView(label("Listening speed", 13f, muted))
+        box.addView(speedGroup)
         box.addView(label("Gemini key (empty = the one built into the app)", 13f, muted))
         box.addView(keyInput)
         box.addView(label("Model (empty = $DEFAULT_MODEL; backup = $BACKUP_MODEL)", 13f, muted))
@@ -767,6 +784,11 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             .setView(box)
             .setPositiveButton("Save") { _, _ ->
                 voice.expressive = expressiveBox.isChecked
+                val tuning = if (tuningBox.isChecked) "v0.10" else "v0.11"
+                voice.tuning = tuning
+                val rate = speeds.getOrNull(speedGroup.checkedRadioButtonId - 7000)?.first ?: 0.92f
+                voice.baseRate = rate
+                prefs.edit().putString("tuning", tuning).putFloat("baseRate", rate).apply()
                 prefs.edit()
                     .putString("key", keyInput.text.toString().trim())
                     .putString("model", modelInput.text.toString().trim())

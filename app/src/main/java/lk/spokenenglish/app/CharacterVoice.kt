@@ -30,6 +30,12 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
     /** Set from ⚙ ("Expressive voice"); on by default. */
     var expressive = true
 
+    /** Which tuning to use: "v0.11" (GPT review, default) or "v0.10" (for comparing). */
+    var tuning = "v0.11"
+
+    /** Listening speed stage from ⚙: 0.92 starting, 0.96 developing, 1.00 comfortable. */
+    var baseRate = 0.92f
+
     private val main = Handler(Looper.getMainLooper())
     private var ready = false
     private val chosen = mutableMapOf<String, Voice?>()
@@ -103,11 +109,11 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         val run = "u${++seq}-"
         runPrefix = run
         runLines = lines
-        val pace = character.pace
+        val pace = if (tuning == "v0.10") character.pace else character.pace011
         if (!expressive) {
             lastId = run + "all"
             tts.setPitch(1.0f)
-            tts.setSpeechRate(BASE_RATE * pace)
+            tts.setSpeechRate(baseRate * pace)
             tts.speak(lines.joinToString(" ") { it.text }, TextToSpeech.QUEUE_FLUSH, null, lastId)
             return
         }
@@ -115,7 +121,7 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         lines.forEachIndexed { i, line ->
             val (pitch, rate) = shape(line.tone)
             tts.setPitch(pitch)                 // captured per sentence when it is queued
-            tts.setSpeechRate(BASE_RATE * rate * pace)
+            tts.setSpeechRate(baseRate * rate * pace)
             val params = android.os.Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, loudness(line.tone))
             }
@@ -125,11 +131,11 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
             }
         }
         tts.setPitch(1.0f)
-        tts.setSpeechRate(BASE_RATE)
+        tts.setSpeechRate(baseRate)
     }
 
     /** Small, natural changes per tone: (pitch, speed factor). */
-    private fun shape(tone: String): Pair<Float, Float> = when (tone.lowercase()) {
+    private fun shape(tone: String): Pair<Float, Float> = if (tuning != "v0.10") shape011(tone) else when (tone.lowercase()) {
         "excited", "happy", "joke" -> 1.10f to 1.07f
         "surprised" -> 1.12f to 1.00f
         "question" -> 1.06f to 1.00f
@@ -141,8 +147,32 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
         else -> 1.00f to 1.00f
     }
 
+    /** v0.11 (GPT review, 11 Nov): gentler pitch steps, question below curious. */
+    private fun shape011(tone: String): Pair<Float, Float> = when (tone.lowercase()) {
+        "excited", "happy", "joke" -> 1.08f to 1.05f
+        "surprised" -> 1.10f to 1.00f
+        "question" -> 1.03f to 1.00f
+        "curious" -> 1.07f to 0.98f
+        "warm", "kind" -> 1.02f to 0.97f
+        "calm", "thinking" -> 0.98f to 0.96f
+        "sad", "sorry" -> 0.96f to 0.95f
+        "annoyed" -> 0.98f to 1.02f
+        else -> 1.00f to 1.00f
+    }
+
+    private fun loudness011(tone: String): Float = when (tone.lowercase()) {
+        "excited", "happy", "joke", "surprised" -> 1.0f
+        "question" -> 0.95f
+        "curious" -> 0.92f
+        "warm", "kind" -> 0.90f
+        "calm", "thinking" -> 0.86f
+        "sad", "sorry" -> 0.84f
+        "annoyed" -> 0.98f
+        else -> 0.92f
+    }
+
     /** Louder for excitement, softer for calm or sad (1.0 = full). */
-    private fun loudness(tone: String): Float = when (tone.lowercase()) {
+    private fun loudness(tone: String): Float = if (tuning != "v0.10") loudness011(tone) else when (tone.lowercase()) {
         "excited", "happy", "joke", "surprised", "annoyed" -> 1.0f
         "question" -> 0.95f
         "curious" -> 0.92f
@@ -155,6 +185,17 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
     /** Pauses like a person: short after "Oh!", a thinking pause after "Hmm", a breath before a question. */
     private fun pauseAfter(line: Line, next: Line): Long {
         val t = line.text.trim().lowercase()
+        if (tuning != "v0.10") {
+            // v0.11: thinking → before a question → short reaction → ordinary; a little variation so
+            // transitions are not all identical.
+            val base = when {
+                t.startsWith("hmm") || t.startsWith("um") || t.endsWith("...") || t.endsWith("…") -> 400L
+                next.text.trim().endsWith("?") -> 300L
+                isInterjection(line.text) -> 180L
+                else -> 220L
+            }
+            return base + kotlin.random.Random.nextLong(-30, 31)
+        }
         return when {
             t.startsWith("hmm") || t.startsWith("um") || t.endsWith("...") || t.endsWith("…") -> 380L
             isInterjection(line.text) -> 140L
