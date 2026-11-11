@@ -14,7 +14,7 @@ android {
         // Every GitHub build gets a higher number, so the app can tell when a newer one exists.
         val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInt()
         versionCode = 100 + run
-        versionName = "1.0 (build $run)"
+        versionName = "1.1 (build $run)"
         // The free Gemini key comes from the GitHub secret GEMINI_API_KEY at build time.
         // It can also be typed in the app (gear button), which overrides this one.
         val key = System.getenv("GEMINI_API_KEY") ?: ""
