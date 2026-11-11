@@ -250,8 +250,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         val sc = scene ?: return
         val min = sc.optInt("minTurns", 0)
         subtitleText.text = if (sc.optString("type") == "freechat") "No score · your turns: $turnsSent" else
-            "Goal: ${sc.optString("goal")}" + (if (min > 0) "
-Your turns: $turnsSent / $min" else "")
+            "Goal: ${sc.optString("goal")}" + (if (min > 0) "\nYour turns: $turnsSent / $min" else "")
     }
 
     /** Finish: back to the lesson with the conversation, for the result screen. */
