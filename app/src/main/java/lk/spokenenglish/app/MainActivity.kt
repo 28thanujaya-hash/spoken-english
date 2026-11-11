@@ -122,6 +122,9 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     // ---- partner state ----
     private var waitingReply = false
+    private var requestSeq = 0                                   // answers from older requests are ignored
+    private var pendingTurn: List<Pair<String, Boolean>>? = null // what he said while Sam is thinking
+    private var pendingBubble: View? = null
     private var partnerTalking = false
     private var laughing = false
 
@@ -242,7 +245,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     // ---- buttons ----
 
     private fun onMicTap() {
-        if (waitingReply || finishing) return
+        if (finishing) return
+        if (waitingReply) interruptThinking()
         when {
             !inTurn -> beginTurn(sinhala = sinhalaOn)
             !recording -> resumeTurn(sinhala = sinhalaOn)   // paused: new words are added after the old ones
@@ -302,7 +306,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     /** EN | සිං switch: one tap. Tapping සිං while waiting starts the turn in Sinhala. */
     private fun onSwitchTap(toSinhala: Boolean) {
-        if (waitingReply || finishing) return
+        if (finishing) return
+        if (waitingReply) interruptThinking()
         stopSinhalaPulse()
         if (!inTurn) {
             setSinhala(toSinhala)
@@ -427,7 +432,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             addNote("I didn't hear anything. Tap the mic and try again.")
             return
         }
-        addMyBubble(said)
+        pendingBubble = addMyBubble(said)
+        pendingTurn = said
         settleCoach(said)
         val forAi = said.joinToString(" ") { (t, si) -> if (si) "[Sinhala: $t]" else t }
         askPartner(forAi, nudge = false)
@@ -448,6 +454,31 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     // ---- the partner's reply ----
 
+    /**
+     * The buttons are never blocked: tapping the mic or the switch while Sam/Maya is thinking stops the
+     * thinking. His last words come back into the bar, he adds more, and on ↑ the partner thinks again
+     * about everything together (mentor's choice, 11 Nov).
+     */
+    private fun interruptThinking() {
+        if (!waitingReply) return
+        requestSeq++                       // the answer on its way is dropped
+        waitingReply = false
+        if (history.isNotEmpty() && history.last().first == "user") history.removeAt(history.size - 1)
+        face.mood = "neutral"
+        partnerStatus.text = "${partner.name} is listening"
+        val back = pendingTurn
+        pendingTurn = null
+        pendingBubble?.let { messages.removeView(it) }
+        pendingBubble = null
+        if (back != null && back.isNotEmpty()) {
+            segments.clear()
+            segments.addAll(back)
+            partial = ""
+            inTurn = true                  // the mic now carries on after his earlier words
+            showPaused()
+        }
+    }
+
     private fun askPartner(text: String, nudge: Boolean) {
         val key = apiKey()
         if (key.isBlank()) {
@@ -456,6 +487,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         history.add("user" to text)
         waitingReply = true
+        val seq = ++requestSeq
         setButtonsBusy(true)
         face.mood = "thinking"
         partnerStatus.text = "${partner.name} is thinking…"
@@ -466,8 +498,10 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         thread {
             val result = askWithFallback(key, system, snapshot)
             main.post {
-                if (who != partner) return@post   // a new chat was started meanwhile
+                if (who != partner || seq != requestSeq) return@post   // new chat, or he interrupted
                 waitingReply = false
+                pendingTurn = null
+                pendingBubble = null
                 setButtonsBusy(false)
                 result.onSuccess { r ->
                     history.add("model" to JSONObject().put("mood", r.mood).put("laugh", r.laugh).put("reply", r.text)
@@ -953,11 +987,12 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         sendButton.isEnabled = false
     }
 
-    /** While the partner is thinking, the mic and the switch are visibly greyed out. */
-    private fun setButtonsBusy(busy: Boolean) {
+    /** The mic and the switch always stay usable (mentor's rule, 11 Nov). */
+    private fun setButtonsBusy(@Suppress("UNUSED_PARAMETER") busy: Boolean) {
+        // Never greyed out or blocked: tapping while the partner thinks interrupts the thinking.
         if (!::micButton.isInitialized) return
-        micButton.isEnabled = !busy
-        langSwitch.alpha = if (busy) 0.35f else 1f
+        micButton.isEnabled = true
+        langSwitch.alpha = 1f
     }
 
     /** Lights EN (teal) or සිං (orange). */
@@ -1137,7 +1172,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         prefs.edit().putString(key, arr.toString()).apply()
     }
 
-    private fun addMyBubble(said: List<Pair<String, Boolean>>) {
+    private fun addMyBubble(said: List<Pair<String, Boolean>>): View {
         val sb = SpannableStringBuilder()
         for ((t, si) in said) {
             if (sb.isNotEmpty()) sb.append(" ")
@@ -1157,6 +1192,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         wrap.addView(bubble, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
         wrap.addView(label("What the app heard", 11.5f, muted).apply { gravity = Gravity.END })
         addToMessages(wrap, Gravity.END, fullWidth = true)
+        return wrap
     }
 
     /** Partner speech is voice only; the words appear only if he taps "Show words". */
