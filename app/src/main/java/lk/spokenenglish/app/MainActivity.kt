@@ -98,6 +98,15 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private var sinhalaPulse: ObjectAnimator? = null
 
     private var partner: Character = Characters.SAM
+
+    // ---- a lesson scene (from SessionActivity): situation, mode (face / video / phone), goal, turns ----
+    private var scene: JSONObject? = null
+    private var turnsSent = 0
+    private val transcript = org.json.JSONArray()
+    private lateinit var titleText: TextView
+    private lateinit var subtitleText: TextView
+    private var shake: ShakeReport? = null
+    private var callStart = 0L
     private val history = mutableListOf<Pair<String, String>>()
 
     // ---- the turn he is building (text is never editable) ----
@@ -155,14 +164,12 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             prefs.edit().remove("model").putBoolean("modelReset05", true).apply()
         }
         vibrator = getSystemService(Vibrator::class.java)
+        scene = intent.getStringExtra("scene")?.let { runCatching { JSONObject(it) }.getOrNull() }
         buildUi()
         showIdle()
-
-        updater = Updater(this) { addNote(it) }
-        updater.onReady = { maybeUpdate() }
-        updater.greetAfterUpdate()
+        applyScene()
+        shake = ShakeReport(this) { intent.getStringExtra("where")?.let { "$it (conversation)" } ?: "Free talk" }
         courseDay()   // remembers Day 1
-        updater.check(force = true)
 
         speech = SpeechLoop(this, this)
         voice = CharacterVoice(this) { ok ->
@@ -207,7 +214,57 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     override fun onResume() {
         super.onResume()
+        shake?.start()
         if (::updater.isInitialized) { updater.resumeAfterPermission(); updater.check(); maybeUpdate() }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        shake?.stop()
+    }
+
+    // ---------------------------------------------------------------- lesson scene
+
+    /** Header, face and mode for a lesson scene; plain "Free talk" otherwise. */
+    private fun applyScene() {
+        val sc = scene ?: return
+        val free = sc.optString("type") == "freechat"
+        titleText.text = if (free) "Free chat" else sc.optString("where").ifBlank { "Conversation" }
+        updateSubtitle()
+        when (sc.optString("mode")) {
+            "phone" -> { face.visibility = View.GONE; callStart = SystemClock.elapsedRealtime(); main.post(callTick) }
+            "video" -> face.layoutParams = face.layoutParams.apply { height = dp(240) }
+        }
+    }
+
+    private val callTick = object : Runnable {
+        override fun run() {
+            if (isFinishing || scene?.optString("mode") != "phone") return
+            val s = (SystemClock.elapsedRealtime() - callStart) / 1000
+            partnerName.text = "📞  ${partner.name}  ·  %d:%02d".format(s / 60, s % 60)
+            main.postDelayed(this, 1000)
+        }
+    }
+
+    private fun updateSubtitle() {
+        val sc = scene ?: return
+        val min = sc.optInt("minTurns", 0)
+        subtitleText.text = if (sc.optString("type") == "freechat") "No score · your turns: $turnsSent" else
+            "Goal: ${sc.optString("goal")}" + (if (min > 0) "
+Your turns: $turnsSent / $min" else "")
+    }
+
+    /** Finish: back to the lesson with the conversation, for the result screen. */
+    private fun finishScene() {
+        if (recording) speech.cancel()
+        voice.stop()
+        setResult(RESULT_OK, android.content.Intent().putExtra("transcript", transcript.toString()).putExtra("turns", turnsSent))
+        finish()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (scene != null) finishScene() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     /** Offers a downloaded update (Update / Later) only when he isn't talking and nobody is speaking. */
@@ -238,7 +295,28 @@ class MainActivity : Activity(), SpeechLoop.Listener {
     private fun startChat() {
         val count = prefs.getInt("chats", 0)
         partner = if (count % 2 == 0) Characters.SAM else Characters.MAYA   // the app chooses, about half each
+        intent.getStringExtra("partner")?.let { n -> if (n == "Sam") partner = Characters.SAM else if (n == "Maya") partner = Characters.MAYA }
         prefs.edit().putInt("chats", count + 1).apply()
+        val sc = scene
+        if (sc != null) {
+            history.clear(); messages.removeAllViews()
+            face.character = partner; face.mood = "happy"
+            if (sc.optString("mode") != "phone") partnerName.text = partner.name
+            partnerStatus.text = "${partner.name} is listening"
+            silenceStage = 0; hideNudge()
+            val opener = sc.optString("opener")
+            history.add("user" to "(The scene starts now. ${if (opener.isBlank()) "Wait: he speaks first." else "You speak first."})")
+            if (opener.isBlank()) {
+                history.add("model" to JSONObject().put("mood", "neutral").put("reply", "(waits)").toString())
+                addNote("You speak first.")
+            } else {
+                history.add("model" to JSONObject().put("mood", "happy").put("reply", opener).toString())
+                transcript.put(JSONObject().put("who", partner.name).put("text", opener))
+                addPartnerBubble(opener, null)
+                voice.speak(opener, partner)
+            }
+            return
+        }
 
         history.clear()
         messages.removeAllViews()
@@ -448,6 +526,9 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
         pendingBubble = addMyBubble(said)
         pendingTurn = said
+        turnsSent++
+        transcript.put(JSONObject().put("who", "he").put("text", said.joinToString(" ") { (t, si) -> if (si) "[Sinhala: $t]" else t }))
+        if (scene != null) updateSubtitle()
         settleCoach(said)
         val forAi = said.joinToString(" ") { (t, si) -> if (si) "[Sinhala: $t]" else t }
         askPartner(forAi, nudge = false)
@@ -493,6 +574,18 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         }
     }
 
+    private fun sceneRules(): String {
+        val sc = scene ?: return ""
+        val free = sc.optString("type") == "freechat"
+        val ideas = sc.optJSONArray("ideas")
+        return "\n\nSCENE (follow it; stay in this role for the whole conversation):\n" +
+            (if (free) "A relaxed free chat, no score. ${sc.optString("brief")} Ideas he may bring up: " +
+                (0 until (ideas?.length() ?: 0)).joinToString(", ") { ideas!!.getString(it) } + "."
+            else "Where: ${sc.optString("where")}. Mode: ${sc.optString("mode")} (on the phone there is no face). " +
+                "${sc.optString("brief")} His goal: ${sc.optString("goal")}.") +
+            " Remember what he says. Keep him talking; never lecture."
+    }
+
     private fun askPartner(text: String, nudge: Boolean) {
         val key = apiKey()
         if (key.isBlank()) {
@@ -506,7 +599,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         face.mood = "thinking"
         partnerStatus.text = "${partner.name} is thinking…"
 
-        val system = partner.persona + "\n\n" + Characters.grammarRules(grammarLevel())
+        val system = partner.persona + sceneRules() + "\n\n" + Characters.grammarRules(grammarLevel())
         val snapshot = history.toList()
         val who = partner
         thread {
@@ -527,6 +620,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
                     face.mood = r.mood
                     if (!inTurn) setSinhala(false)   // every new turn starts in English
                     addPartnerBubble(r.text, r.ms, r.lines)
+                    transcript.put(JSONObject().put("who", partner.name).put("text", r.text))
                     val coached = r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())
                     if (coached) addCoachCard(r)
                     val level = grammarLevel()
@@ -778,7 +872,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         box.addView(label("Voices: Sam = ${voice.voiceName(Characters.SAM)} · Maya = ${voice.voiceName(Characters.MAYA)}", 12f, muted))
         box.addView(label("App version ${BuildConfig.VERSION_NAME}", 12f, muted))
         box.addView(label("Updates: ${prefs.getString("updateLast", "not checked yet")}", 12f, muted))
-        updater.check(force = true)
+        if (::updater.isInitialized) updater.check(force = true)
         AlertDialog.Builder(this)
             .setTitle("Test settings")
             .setView(box)
@@ -820,10 +914,13 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             setPadding(dp(16), dp(14), dp(8), dp(6))
         }
         val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        titles.addView(label("Free talk", 18f, ink, bold = true))
-        titles.addView(label("Test version ${BuildConfig.VERSION_NAME} · Week 1", 12.5f, muted))
+        titleText = label("Free talk", 18f, ink, bold = true)
+        subtitleText = label("Test version ${BuildConfig.VERSION_NAME} · Week 1", 12.5f, muted)
+        titles.addView(titleText)
+        titles.addView(subtitleText)
         header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(smallButton("New chat") {
+        if (intent.getStringExtra("scene") != null) header.addView(smallButton("Finish ✓") { finishScene() })
+        else header.addView(smallButton("New chat") {
             if (!inTurn && !waitingReply) { stopVoiceAndLaugh(); startChat() }
         })
         header.addView(smallButton("⚙") { openSettings() })
