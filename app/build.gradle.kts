@@ -11,12 +11,15 @@ android {
         applicationId = "lk.spokenenglish.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3-test"
+        // Every GitHub build gets a higher number, so the app can tell when a newer one exists.
+        val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInt()
+        versionCode = 100 + run
+        versionName = "0.4-test (build $run)"
         // The free Gemini key comes from the GitHub secret GEMINI_API_KEY at build time.
         // It can also be typed in the app (gear button), which overrides this one.
         val key = System.getenv("GEMINI_API_KEY") ?: ""
         buildConfigField("String", "GEMINI_API_KEY", "\"$key\"")
+        buildConfigField("String", "UPDATE_REPO", "\"28thanujaya-hash/spoken-english-updates\"")
     }
 
     signingConfigs {

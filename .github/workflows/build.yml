@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      HAS_RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,3 +34,16 @@ jobs:
         with:
           name: spoken-english-test-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Publish the APK for in-app updates
+        if: env.HAS_RELEASE_TOKEN == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          CODE=$((100 + GITHUB_RUN_NUMBER))
+          cp app/build/outputs/apk/debug/app-debug.apk spoken-english.apk
+          printf '%s\n' "$NOTES" > notes.txt
+          gh release create "v$CODE" spoken-english.apk \
+            -R 28thanujaya-hash/spoken-english-updates \
+            --title "Build $GITHUB_RUN_NUMBER" \
+            --notes-file notes.txt --latest

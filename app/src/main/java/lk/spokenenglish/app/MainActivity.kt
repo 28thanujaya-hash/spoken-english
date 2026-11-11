@@ -86,6 +86,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
 
     private lateinit var speech: SpeechLoop
     private lateinit var voice: CharacterVoice
+    private lateinit var updater: Updater
     private var vibrator: Vibrator? = null
     private var laughPlayer: MediaPlayer? = null
     private var sinhalaPulse: ObjectAnimator? = null
@@ -137,6 +138,11 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         buildUi()
         showIdle()
 
+        updater = Updater(this) { addNote(it) }
+        updater.onReady = { maybeUpdate() }
+        updater.greetAfterUpdate()
+        updater.check(force = true)
+
         speech = SpeechLoop(this, this)
         voice = CharacterVoice(this) { ok ->
             if (!ok) addNote("The phone's Google voice isn't ready. Check Settings › Text-to-speech › Google.")
@@ -146,7 +152,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
             partnerTalking = talking
             face.talking = talking
             partnerStatus.text = if (talking) "${partner.name} is talking" else "${partner.name} is listening"
-            if (!talking) armSilenceTimer() else main.removeCallbacks(silenceCheck)
+            if (!talking) { armSilenceTimer(); maybeUpdate() } else main.removeCallbacks(silenceCheck)
         }
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -162,6 +168,18 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         if (grantResults.isNotEmpty() && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
             addNote("The microphone is needed for talking. Allow it in the phone's app settings.")
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::updater.isInitialized) { updater.check(); maybeUpdate() }
+    }
+
+    /** Installs a downloaded update only when he isn't talking and nobody is speaking. */
+    private fun maybeUpdate() {
+        if (!::updater.isInitialized) return
+        if (inTurn || waitingReply || partnerTalking || laughing) return
+        updater.installIfReady()
     }
 
     override fun onStop() {
@@ -389,6 +407,7 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         main.removeCallbacks(recordingSilenceCheck)
         hideNudge()
         showIdle()
+        maybeUpdate()
     }
 
     // ---- the partner's reply ----
@@ -622,6 +641,8 @@ class MainActivity : Activity(), SpeechLoop.Listener {
         val service = SpeechLoop.googleService(this)?.packageName ?: "phone default (Google not found)"
         box.addView(label("Speech recognition: $service", 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
         box.addView(label("App version ${BuildConfig.VERSION_NAME}", 12f, muted))
+        box.addView(label("Updates: ${prefs.getString("updateLast", "not checked yet")}", 12f, muted))
+        updater.check(force = true)
         AlertDialog.Builder(this)
             .setTitle("Test settings")
             .setView(box)
