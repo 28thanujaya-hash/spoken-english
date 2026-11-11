@@ -73,24 +73,75 @@ object Lessons {
     }
 }
 
-/** What he has done: kept on the phone. */
-class Progress(ctx: Context) {
+/**
+ * What he has done: one learner record on the phone (QA 11 Nov: every screen reads the same numbers).
+ * Older builds kept the coach / grammar / "Say them again" lists in the "settings" store; they are moved here once.
+ */
+class Progress(private val ctx: Context) {
     private val p = ctx.getSharedPreferences("progress", Context.MODE_PRIVATE)
+
+    init { migrate() }
+
+    private fun migrate() {
+        if (p.getBoolean("migrated11", false)) return
+        val s = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val e = p.edit()
+        for (k in listOf("coachLog", "grammarLog", "sayThemAgain")) s.getString(k, null)?.let { e.putString(k, it) }
+        if (!p.contains("firstDay")) e.putLong("firstDay", s.getLong("firstDay", today()))
+        e.putBoolean("migrated11", true).apply()
+    }
 
     fun key(week: Int, day: Int, session: String) = "w${week}d${day}:$session"
     fun isDone(week: Int, day: Int, session: String) = p.getBoolean("done:" + key(week, day, session), false)
     fun markDone(week: Int, day: Int, session: String) {
-        p.edit().putBoolean("done:" + key(week, day, session), true).putLong("lastDone", System.currentTimeMillis()).apply()
+        p.edit().putBoolean("done:" + key(week, day, session), true).putLong("lastDone", System.currentTimeMillis())
+            .remove("pos:" + key(week, day, session)).apply()
     }
 
-    fun dayDone(week: Int, d: JSONObject) = Lessons.sessions(d).all { isDone(week, d.optInt("day"), it.optString("id")) }
+    /** Sessions shown for a day: on a 45-minute day, Listen and react is skipped (QA 11 Nov). */
+    fun sessionsFor(d: JSONObject): List<JSONObject> {
+        val all = Lessons.sessions(d)
+        return if (shortDay()) all.filter { it.optString("id") != "listen" } else all
+    }
+
+    fun dayDone(week: Int, d: JSONObject) = sessionsFor(d).all { isDone(week, d.optInt("day"), it.optString("id")) }
 
     /** The day he is on: the first day not fully done. */
     fun currentDay(): Pair<Int, JSONObject>? = Lessons.allDays().firstOrNull { !dayDone(it.first, it.second) }
         ?: Lessons.allDays().lastOrNull()
 
-    fun add(counter: String, n: Int = 1) = p.edit().putInt(counter, p.getInt(counter, 0) + n).apply()
+    /** Where he stopped inside a session (← saves it; Continue brings him back there). */
+    fun pos(week: Int, day: Int, session: String) = p.getInt("pos:" + key(week, day, session), 0)
+    fun setPos(week: Int, day: Int, session: String, i: Int) = p.edit().putInt("pos:" + key(week, day, session), i).apply()
+
+    fun add(counter: String, n: Int = 1) {
+        p.edit().putInt(counter, p.getInt(counter, 0) + n).putInt("$counter:${today()}", p.getInt("$counter:${today()}", 0) + n).apply()
+    }
     fun count(counter: String) = p.getInt(counter, 0)
+    fun countOn(counter: String, day: Long) = p.getInt("$counter:$day", 0)
+
+    // ---- time practised, streak ----
+    fun today(): Long = (System.currentTimeMillis() + java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis())) / 86_400_000L
+    fun addPractice(ms: Long) {
+        if (ms <= 0 || ms > 3 * 3_600_000L) return
+        val k = "ms:${today()}"
+        p.edit().putLong(k, p.getLong(k, 0) + ms).putLong("msTotal", p.getLong("msTotal", 0) + ms).apply()
+    }
+    fun minutesOn(day: Long) = (p.getLong("ms:$day", 0) / 60_000).toInt()
+    fun minutesToday() = minutesOn(today())
+    fun totalMinutes() = (p.getLong("msTotal", 0) / 60_000).toInt()
+    fun streak(): Int {
+        var d = today(); var n = 0
+        if (p.getLong("ms:$d", 0) <= 0) d -= 1
+        while (p.getLong("ms:$d", 0) > 0) { n++; d-- }
+        return n
+    }
+    fun firstDay(): Long = p.getLong("firstDay", today()).also { if (!p.contains("firstDay")) p.edit().putLong("firstDay", it).apply() }
+    fun startedText(): String = java.text.SimpleDateFormat("d MMM", java.util.Locale.ENGLISH).format(java.util.Date(firstDay() * 86_400_000L))
+
+    // ---- 45-minute day ----
+    fun shortDay() = p.getLong("shortDay", -1L) == today()
+    fun setShortDay(on: Boolean) = p.edit().putLong("shortDay", if (on) today() else -1L).apply()
 
     fun log(list: String, item: JSONObject) {
         val arr = runCatching { JSONArray(p.getString(list, "[]")) }.getOrDefault(JSONArray())
@@ -102,6 +153,28 @@ class Progress(ctx: Context) {
     fun list(list: String): List<JSONObject> {
         val arr = runCatching { JSONArray(p.getString(list, "[]")) }.getOrDefault(JSONArray())
         return (0 until arr.length()).map { arr.getJSONObject(it) }
+    }
+
+    // ---- what Sam and Maya remember about him (a few facts each) ----
+    fun facts(who: String): List<String> = runCatching { JSONArray(p.getString("facts:$who", "[]")) }.getOrDefault(JSONArray())
+        .let { a -> (0 until a.length()).map { a.getString(it) } }
+    fun addFacts(who: String, new: List<String>) {
+        val all = (facts(who) + new.map { it.trim() }.filter { it.length in 3..140 }).distinctBy { it.lowercase() }.takeLast(12)
+        p.edit().putString("facts:$who", JSONArray(all).toString()).apply()
+    }
+
+    // ---- "Say them again": one list and one count everywhere ----
+    fun sayAgainItems(): List<JSONObject> {
+        val done = p.getStringSet("sayDone", emptySet()) ?: emptySet()
+        val raw = list("sayThemAgain")
+        val counts = raw.groupingBy { it.optString("sentence").lowercase() }.eachCount()
+        return raw.filter { it.optString("sentence").isNotBlank() && it.optString("sentence") !in done }
+            .distinctBy { it.optString("sentence").lowercase() }
+            .map { it.put("times", counts[it.optString("sentence").lowercase()] ?: 1) }
+            .sortedByDescending { it.optInt("times") }
+    }
+    fun sayAgainDone(sentence: String) {
+        p.edit().putStringSet("sayDone", (p.getStringSet("sayDone", emptySet()) ?: emptySet()) + sentence).apply()
     }
 
     fun putString(k: String, v: String) = p.edit().putString(k, v).apply()

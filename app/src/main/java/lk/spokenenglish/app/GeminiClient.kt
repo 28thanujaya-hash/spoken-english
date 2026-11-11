@@ -20,7 +20,9 @@ class GeminiClient(private val key: String, private val model: String) {
         val betterSaid: String = "", val betterWrong: String = "", val betterRight: String = "",
         val betterSentence: String = "", val betterWhy: String = "",
         /** The reply split into sentences, each with a tone (from the [tone] marks), for the expressive voice. */
-        val lines: List<Line> = emptyList()
+        val lines: List<Line> = emptyList(),
+        /** New facts he told the partner in this turn (kept for later chats). */
+        val facts: List<String> = emptyList()
     )
 
     class HttpError(val code: Int, message: String, val body: String = "") : Exception(message) {
@@ -79,7 +81,8 @@ class GeminiClient(private val key: String, private val model: String) {
                 coach?.optString("en", "")?.trim().orEmpty(),
                 coach?.optString("sentence", "")?.trim().orEmpty(),
                 b("said"), b("wrong"), b("right"), b("sentence"), b("why"),
-                lines
+                lines,
+                j.optJSONArray("facts")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList()
             )
         } catch (e: Exception) {
             val (said, lines) = readMarks(clean)

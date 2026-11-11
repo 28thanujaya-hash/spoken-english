@@ -24,14 +24,18 @@ object Ai {
         return p.getString("key", "")?.takeIf { it.isNotBlank() } ?: BuildConfig.GEMINI_API_KEY
     }
 
-    fun ask(ctx: Context, system: String, user: String): JSONObject {
+    /** Same as ask, with his recorded voice attached (the review recording). */
+    fun askAudio(ctx: Context, system: String, user: String, audio: java.io.File): JSONObject =
+        ask(ctx, system, user, VoiceRecorder.base64(audio))
+
+    fun ask(ctx: Context, system: String, user: String, audioB64: String? = null): JSONObject {
         val prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
         val chosen = prefs.getString("model", "")?.takeIf { it.isNotBlank() } ?: DEFAULT_MODEL
         var last: Exception = Exception("No AI model available right now")
         for (model in listOf(chosen, BACKUP_MODEL).distinct()) {
             if (System.currentTimeMillis() < prefs.getLong("limited_$model", 0L)) continue
             try {
-                return parse(call(key(ctx), model, system, user))
+                return parse(call(key(ctx), model, system, user, audioB64))
             } catch (e: GeminiClient.HttpError) {
                 last = e
                 if (e.code == 429) {
@@ -53,11 +57,12 @@ object Ai {
         }
     }
 
-    private fun call(key: String, model: String, system: String, user: String): String {
+    private fun call(key: String, model: String, system: String, user: String, audioB64: String? = null): String {
+        val parts = JSONArray().put(JSONObject().put("text", user))
+        if (audioB64 != null) parts.put(JSONObject().put("inlineData", JSONObject().put("mimeType", "audio/aac").put("data", audioB64)))
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
-            .put("contents", JSONArray().put(JSONObject().put("role", "user")
-                .put("parts", JSONArray().put(JSONObject().put("text", user)))))
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put("generationConfig", JSONObject().put("responseMimeType", "application/json")
                 .put("temperature", 0.4).put("maxOutputTokens", 1500))
         val url = URL("https://generativelanguage.googleapis.com/v1beta/models/" +
@@ -66,7 +71,7 @@ object Ai {
         try {
             con.requestMethod = "POST"
             con.connectTimeout = 15000
-            con.readTimeout = 40000
+            con.readTimeout = if (audioB64 != null) 90000 else 40000
             con.doOutput = true
             con.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             con.setRequestProperty("x-goog-api-key", key)

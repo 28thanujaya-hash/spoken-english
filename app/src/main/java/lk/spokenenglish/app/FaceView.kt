@@ -60,6 +60,8 @@ class FaceView(ctx: Context) : View(ctx) {
     private val ticker = Handler(Looper.getMainLooper())
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -104,9 +106,12 @@ class FaceView(ctx: Context) : View(ctx) {
         val r = min(w, h) * 0.30f
         val ch = character
 
-        // Soft background circle
-        fill.color = Color.parseColor("#E3F1EF")
+        // Background circle in the character's tint, with a bright ring so the face stands out on the dark screen
+        fill.color = if (ch.male) Color.parseColor("#2A4466") else Color.parseColor("#55304A")
         c.drawCircle(cx, h / 2f, min(w, h) * 0.48f, fill)
+        ring.color = if (ch.male) Color.parseColor("#8AB4F8") else Color.parseColor("#F49AC1")
+        ring.strokeWidth = min(w, h) * 0.018f
+        c.drawCircle(cx, h / 2f, min(w, h) * 0.48f - ring.strokeWidth, ring)
 
         c.save()
         if (laughing) c.translate(0f, -r * 0.07f * bob)
@@ -121,9 +126,11 @@ class FaceView(ctx: Context) : View(ctx) {
         fill.color = ch.shirt
         c.drawOval(cx - r * 1.35f, cy + r * 0.85f, cx + r * 1.35f, cy + r * 2.4f, fill)
 
-        // Head
+        // Head (a light outline keeps the dark hair visible on the dark screen)
         fill.color = ch.skin
         c.drawCircle(cx, cy, r, fill)
+        ring.color = Color.parseColor("#33FFFFFF"); ring.strokeWidth = r * 0.04f
+        c.drawCircle(cx, cy - r * 0.02f, r * 1.04f, ring)
 
         // Hair on top
         fill.color = ch.hair

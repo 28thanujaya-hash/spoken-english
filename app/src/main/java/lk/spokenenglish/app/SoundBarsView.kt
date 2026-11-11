@@ -11,7 +11,7 @@ import kotlin.math.max
 class SoundBarsView(ctx: Context) : View(ctx) {
 
     private val levels = FloatArray(44)
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0F6B6B") }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#3C8F80") }
 
     /** Teal for English, orange while the Sinhala button is held. */
     var color: Int
@@ -23,6 +23,13 @@ class SoundBarsView(ctx: Context) : View(ctx) {
         val v = ((rmsDb + 2f) / 12f).coerceIn(0f, 1f)
         System.arraycopy(levels, 1, levels, 0, levels.size - 1)
         levels[levels.size - 1] = v
+        invalidate()
+    }
+
+    /** A still "voice message" waveform (drawing: ▶ ılıllı 0:04), different for each seed. */
+    fun still(seed: Int) {
+        val r = java.util.Random(seed.toLong())
+        for (i in levels.indices) levels[i] = if (i < levels.size * 3 / 4) 0.2f + r.nextFloat() * 0.75f else 0.08f
         invalidate()
     }
 

@@ -31,6 +31,8 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         fun onProblem(message: String)
         /** The recogniser is really listening now (called at every restart too). */
         fun onListening()
+        /** Google's confidence for the last segment (0..1), when the phone gives one. */
+        fun onConfidence(score: Float) {}
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -148,7 +150,10 @@ class SpeechLoop(private val ctx: Context, private val listener: Listener) : Rec
         if (!active) return
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             ?.firstOrNull()?.trim().orEmpty()
-        if (text.isNotEmpty()) listener.onSegment(text, segmentSinhala)
+        if (text.isNotEmpty()) {
+            results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()?.let { if (it >= 0f) listener.onConfidence(it) }
+            listener.onSegment(text, segmentSinhala)
+        }
         next()
     }
 

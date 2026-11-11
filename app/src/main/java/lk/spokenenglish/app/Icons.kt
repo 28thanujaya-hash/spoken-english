@@ -16,7 +16,7 @@ import android.graphics.drawable.RippleDrawable
 import android.view.View
 import kotlin.math.min
 
-enum class Glyph { MIC, PAUSE, SEND, CLOSE }
+enum class Glyph { MIC, PAUSE, SEND, CLOSE, PLAY, CAMERA, HANGUP }
 
 /** Draws one icon centred in a box of size s at (x, y). */
 object GlyphPainter {
@@ -52,6 +52,31 @@ object GlyphPainter {
                 path.lineTo(cx, cy - s * 0.36f)
                 path.lineTo(cx + s * 0.30f, cy - s * 0.04f)
                 c.drawPath(path, p)
+            }
+            Glyph.PLAY -> {
+                p.style = Paint.Style.FILL
+                path.reset()
+                path.moveTo(cx - s * 0.18f, cy - s * 0.26f)
+                path.lineTo(cx + s * 0.28f, cy)
+                path.lineTo(cx - s * 0.18f, cy + s * 0.26f)
+                path.close()
+                c.drawPath(path, p)
+            }
+            Glyph.CAMERA -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = s * 0.07f
+                c.drawRoundRect(cx - s * 0.32f, cy - s * 0.18f, cx + s * 0.12f, cy + s * 0.18f, s * 0.05f, s * 0.05f, p)
+                path.reset()
+                path.moveTo(cx + s * 0.14f, cy - s * 0.02f)
+                path.lineTo(cx + s * 0.32f, cy - s * 0.14f)
+                path.lineTo(cx + s * 0.32f, cy + s * 0.14f)
+                path.lineTo(cx + s * 0.14f, cy + s * 0.02f)
+                c.drawPath(path, p)
+            }
+            Glyph.HANGUP -> {
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = s * 0.13f
+                c.drawArc(RectF(cx - s * 0.36f, cy - s * 0.12f, cx + s * 0.36f, cy + s * 0.34f), 200f, 140f, false, p)
             }
             Glyph.CLOSE -> {
                 p.style = Paint.Style.STROKE
