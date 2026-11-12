@@ -80,7 +80,14 @@ object Lessons {
 class Progress(private val ctx: Context) {
     private val p = ctx.getSharedPreferences("progress", Context.MODE_PRIVATE)
 
-    init { migrate() }
+    init { migrate(); fixAnswers() }
+
+    /** 1.1/1.2 bug: "answers" was both a counter and a list, so the second answer crashed. The list is now "answerLog". */
+    private fun fixAnswers() {
+        val v = p.all["answers"] as? String ?: return
+        val n = runCatching { org.json.JSONArray(v).length() }.getOrDefault(0)
+        p.edit().putString("answerLog", v).putInt("answers", n).apply()
+    }
 
     private fun migrate() {
         if (p.getBoolean("migrated11", false)) return
@@ -116,11 +123,12 @@ class Progress(private val ctx: Context) {
     fun pos(week: Int, day: Int, session: String) = p.getInt("pos:" + key(week, day, session), 0)
     fun setPos(week: Int, day: Int, session: String, i: Int) = p.edit().putInt("pos:" + key(week, day, session), i).apply()
 
+    private fun int(k: String) = (p.all[k] as? Int) ?: 0
     fun add(counter: String, n: Int = 1) {
-        p.edit().putInt(counter, p.getInt(counter, 0) + n).putInt("$counter:${today()}", p.getInt("$counter:${today()}", 0) + n).apply()
+        p.edit().putInt(counter, int(counter) + n).putInt("$counter:${today()}", int("$counter:${today()}") + n).apply()
     }
-    fun count(counter: String) = p.getInt(counter, 0)
-    fun countOn(counter: String, day: Long) = p.getInt("$counter:$day", 0)
+    fun count(counter: String) = int(counter)
+    fun countOn(counter: String, day: Long) = int("$counter:$day")
 
     // ---- time practised, streak ----
     fun today(): Long = (System.currentTimeMillis() + java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis())) / 86_400_000L

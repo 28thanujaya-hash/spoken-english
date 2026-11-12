@@ -38,6 +38,10 @@ class HomeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // If the app ever closes by itself, the reason is kept and goes into the mentor's report.
+        val ctx = applicationContext
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        if (prev !is CrashKeeper) Thread.setDefaultUncaughtExceptionHandler(CrashKeeper(ctx, prev))
         progress = Progress(this)
         buildUi()
         shake = ShakeReport(this) { "Home screen (tab ${tab + 1})" }
@@ -396,6 +400,7 @@ class HomeActivity : Activity() {
         if (changed.isNotEmpty()) { sb.append("\nWhat the app changed and why:\n"); changed.forEach { sb.append("• $it\n") } }
         val sums = Memory.summaries(progress).takeLast(3)
         if (sums.isNotEmpty()) { sb.append("\nLatest conversations:\n"); sums.forEach { sb.append("— ${it.optString("title")} (with ${it.optString("who")}):\n${it.optString("summary")}\n") } }
+        progress.getString("lastCrash")?.let { sb.append("\nLast time the app closed by itself (for Claude):\n${it.take(1500)}\n") }
         val prof = Memory.life(progress).takeLast(12)
         if (prof.isNotEmpty()) { sb.append("\nWhat Sam and Maya know about him:\n"); prof.forEach { sb.append("• ${it.optString("fact")}\n") } }
         return Report(rows, sb.toString(), recs.map { File(it.optString("file")) }.filter { it.exists() })
@@ -408,5 +413,17 @@ class HomeActivity : Activity() {
         else Intent(Intent.ACTION_SEND_MULTIPLE).setType("audio/aac").putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         i.putExtra(Intent.EXTRA_TEXT, r.text).setPackage("com.whatsapp")
         try { startActivity(i) } catch (e: Exception) { i.setPackage(null); runCatching { startActivity(Intent.createChooser(i, "Send report")) } }
+    }
+}
+
+/** Keeps the reason when the app closes by itself (stack trace in the "progress" prefs, key lastCrash). */
+class CrashKeeper(private val ctx: android.content.Context, private val prev: Thread.UncaughtExceptionHandler?) : Thread.UncaughtExceptionHandler {
+    override fun uncaughtException(t: Thread, e: Throwable) {
+        runCatching {
+            val sw = java.io.StringWriter(); e.printStackTrace(java.io.PrintWriter(sw))
+            ctx.getSharedPreferences("progress", android.content.Context.MODE_PRIVATE).edit()
+                .putString("lastCrash", "${java.util.Date()} · ${BuildConfig.VERSION_NAME}\n" + sw.toString().take(4000)).commit()
+        }
+        prev?.uncaughtException(t, e)
     }
 }

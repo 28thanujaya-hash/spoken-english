@@ -847,7 +847,7 @@ class SessionActivity : Activity() {
     /** After every part: an evaluation of his answers goes into his profile (finding 7, 11). */
     private fun evaluatePart() {
         if (sid !in setOf("shadow", "phrases", "listen", "review", "about", "voice", "start")) return
-        val answers = progress.list("answers").filter { it.optLong("at") >= partStart }
+        val answers = progress.list("answerLog").filter { it.optLong("at") >= partStart }
         if (answers.isEmpty()) return
         val user = "Today's theme: ${day?.optString("title")}\nToday's phrases: ${day?.optJSONArray("phrases")}\nPart: ${session?.optString("title")}\n" +
             "His answers:\n" + answers.joinToString("\n") { "- to \"${it.optString("prompt")}\": ${it.optString("said")} (${it.optString("mark")})" }
@@ -1071,7 +1071,7 @@ class SessionActivity : Activity() {
             talk.reset()
             val score = overlap(TalkBar.plain(said), line)
             val keptUp = lineEndAt > 0 && micAt - lineEndAt in -3000..2500
-            progress.log("answers", JSONObject().put("kind", "shadow").put("prompt", line).put("said", TalkBar.forAi(said))
+            progress.log("answerLog", JSONObject().put("kind", "shadow").put("prompt", line).put("said", TalkBar.forAi(said))
                 .put("mark", if (score >= 0.7f) "good" else "try_again").put("where", "w${week}d$dayNo"))
             if (score >= 0.7f || miss >= 2) { progress.add("shadowLines"); stepShadow(s, who, k + 1, (score >= 0.85f) to keptUp) }
             else {
@@ -1477,7 +1477,7 @@ class SessionActivity : Activity() {
     private fun logAnswer(kind: String, prompt: String, said: List<Pair<String, Boolean>>, mark: String) {
         progress.add("answers")
         if (mark == "good") progress.add("good")
-        progress.log("answers", JSONObject().put("kind", kind).put("prompt", prompt).put("said", TalkBar.forAi(said)).put("mark", mark).put("where", "w${week}d$dayNo"))
+        progress.log("answerLog", JSONObject().put("kind", kind).put("prompt", prompt).put("said", TalkBar.forAi(said)).put("mark", mark).put("where", "w${week}d$dayNo"))
         if (testMode && kind == "drill") testLog.put(JSONObject().put("part", steps[index].optString("point")).put("prompt", prompt).put("answer", TalkBar.forAi(said)))
     }
 
