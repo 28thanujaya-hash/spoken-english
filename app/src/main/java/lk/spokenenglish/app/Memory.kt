@@ -137,8 +137,41 @@ object Memory {
         o.keys().asSequence().map { it to o.optString(it) }.toList() } ?: emptyList()
 
     /** Everything Sam and Maya should know before a conversation (finding 3: facts + last ~15 summaries + the last chat with them). */
+    /**
+     * What is happening in Sam's and Maya's own lives on this course day (sam-and-maya.md): happy and sad events
+     * placed where they help the lesson. courseDay = (week - 1) * 7 + day.
+     */
+    private val EVENTS = listOf(
+        Triple("sam", 3..3, "TODAY: your mum had a baby boy last night, your new little brother Thenuka. You're very happy, proud and tired. Share this news early and let him react (good chance for him to say congratulations and ask questions)."),
+        Triple("sam", 4..14, "Your baby brother Thenuka was born recently: no sleep, nappies, Kavi is a bit jealous, Thenuka just smiled for the first time. Happy, tired, funny stories when it fits."),
+        Triple("sam", 9..9, "SAD: your dog Bruno, the golden Labrador, died last night of old age. You are very sad and quieter than usual, shorter answers. Tell him once, simply, without heavy detail; let him respond. You can still talk about other things."),
+        Triple("sam", 10..16, "Bruno, your Labrador, died recently. You still miss him; sometimes you remember small things (him stealing slippers, sleeping by the door), getting a little better each day."),
+        Triple("sam", 24..24, "You failed your driving test today (the parking part). Embarrassed and annoyed; you might ask him for advice."),
+        Triple("sam", 33..33, "You passed your driving test today! Very happy."),
+        Triple("maya", 12..13, "You were just made shift leader at the café. Happy and a bit nervous about it."),
+        Triple("maya", 18..20, "A rude customer shouted at you at work and you cried afterwards. Upset and angry; you may ask what he would have done."),
+        Triple("maya", 26..34, "You're planning your trip to India (Chennai, Madurai) and saving money. Excited; you love talking about plans."),
+        Triple("maya", 36..42, "Paati, your grandmother in Jaffna, fell ill and is in hospital. Worried and homesick. Mention it gently, once."),
+        Triple("maya", 43..45, "Paati is home and better, and she cooked crab curry again. Relieved and happy."),
+        Triple("sam", 50..56, "You, Maya and the class are planning a trip to Ella together. Excited."),
+        Triple("maya", 50..56, "You, Sam and the class are planning a trip to Ella together. Excited."),
+    )
+
+    private fun lifeNow(who: String, week: Int, day: Int): String {
+        val cd = (week - 1) * 7 + day
+        val now = EVENTS.filter { it.first.equals(who, true) && cd in it.second }.map { it.third }
+        val other = EVENTS.filter { !it.first.equals(who, true) && cd in it.second && it.second.first == cd }
+            .map { "${if (it.first == "sam") "Sam" else "Maya"}'s news (you know it as their friend): " + it.third.substringAfter(": ").take(160) }
+        if (now.isEmpty() && other.isEmpty()) return ""
+        return "\n\nWHAT'S HAPPENING IN YOUR OWN LIFE NOW (share it naturally when it fits, with real feeling, and give him room to " +
+            "react; never more than one sad thing in a chat; if he seems uncomfortable, change the subject kindly; never ask him about his own sad things):\n" +
+            (now + other).joinToString("\n") { "- $it" } +
+            "\nNever contradict what you said earlier about your own life."
+    }
+
     fun contextFor(p: Progress, who: String, week: Int, day: Int): String {
         val sb = StringBuilder()
+        sb.append(lifeNow(who, week, day))
         val facts = life(p).takeLast(40)
         if (facts.isNotEmpty()) sb.append("\n\nWHAT YOU KNOW ABOUT HIM (from earlier chats; bring things up naturally sometimes):\n")
             .append(facts.joinToString("\n") { "- ${it.optString("fact")}" })

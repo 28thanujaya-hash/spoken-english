@@ -1506,6 +1506,15 @@ class SessionActivity : Activity() {
     }
 
     private fun logAnswer(kind: String, prompt: String, said: List<Pair<String, Boolean>>, mark: String) {
+        if (Ui.name(this) == "me" && prompt.contains("your name", true)) {
+            val t = TalkBar.plain(said)
+            val n = Regex("(?i)(?:my name is|my name's|i'm|i am|this is|call me)\\s+([A-Za-z]+)").find(t)?.groupValues?.get(1)
+                ?: t.trim().split(Regex("\\s+")).singleOrNull()?.takeIf { it.length > 1 }
+            n?.takeIf { it.lowercase() !in setOf("from", "a", "the", "studying", "fine", "good") }?.let {
+                getSharedPreferences("progress", MODE_PRIVATE).edit().putString("name", it.replaceFirstChar { c -> c.uppercase() }).apply()
+                Trace.i("name", "saved from his answer: $it")
+            }
+        }
         Trace.i("answer", "$kind · to \"$prompt\" · he said \"${TalkBar.forAi(said)}\" · ${talk.lastTurnInfo} · mark $mark")
         progress.add("answers")
         if (mark == "good") progress.add("good")
