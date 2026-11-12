@@ -20,6 +20,10 @@ android {
         val key = System.getenv("GEMINI_API_KEY") ?: ""
         buildConfigField("String", "GEMINI_API_KEY", "\"$key\"")
         buildConfigField("String", "UPDATE_REPO", "\"28thanujaya-hash/spoken-english-updates\"")
+        // Reports go to the private repo as Issues; the token (GitHub secret REPORTS_TOKEN) may only write Issues.
+        val reports = System.getenv("REPORTS_TOKEN") ?: ""
+        buildConfigField("String", "REPORTS_TOKEN", "\"$reports\"")
+        buildConfigField("String", "REPORTS_REPO", "\"28thanujaya-hash/spoken-english\"")
     }
 
     signingConfigs {

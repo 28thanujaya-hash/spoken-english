@@ -34,9 +34,16 @@ object Ai {
         var last: Exception = Exception("No AI model available right now")
         for (model in listOf(chosen, BACKUP_MODEL).distinct()) {
             if (System.currentTimeMillis() < prefs.getLong("limited_$model", 0L)) continue
+            val t0 = System.currentTimeMillis()
+            val what = "coach: " + system.take(70).replace('\n', ' ')
+            Trace.aiRequest(what + if (audioB64 != null) " (with audio ${audioB64.length / 1365} KB)" else "", model, system, user)
             try {
-                return parse(call(key(ctx), model, system, user, audioB64))
+                val raw = call(key(ctx), model, system, user, audioB64)
+                Trace.aiReply(raw)
+                Trace.i("ai", "coach call ok · $model · ${System.currentTimeMillis() - t0} ms${if (audioB64 != null) " · audio" else ""}")
+                return parse(raw)
             } catch (e: GeminiClient.HttpError) {
+                Trace.w("ai", "coach call failed · $model · HTTP ${e.code} · ${System.currentTimeMillis() - t0} ms · ${e.body.take(200)}")
                 last = e
                 if (e.code == 429) {
                     val until = if (e.perDay) nextPacificMidnight() else System.currentTimeMillis() + 60_000
@@ -44,8 +51,12 @@ object Ai {
                     continue
                 }
                 throw e
+            } catch (e: Exception) {
+                Trace.e("ai", "coach call error · $model · ${System.currentTimeMillis() - t0} ms · $e")
+                throw e
             }
         }
+        Trace.e("ai", "coach call: no model available · $last")
         throw last
     }
 

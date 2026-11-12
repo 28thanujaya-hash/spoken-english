@@ -74,6 +74,7 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
                     }
 
                     override fun onError(utteranceId: String?, errorCode: Int) {
+                        Trace.w("voice", "speaking failed, code $errorCode")
                         main.post {
                             onSpeaking?.invoke(false)
                             // An online voice failed (slow network): switch to the offline voice and say it again.
@@ -97,6 +98,7 @@ class CharacterVoice(ctx: Context, private val onReady: (Boolean) -> Unit) {
 
     /** Says a reply. lines: the AI's sentence-by-sentence tones; if missing, tones come from the punctuation. */
     fun speak(text: String, character: Character, lines: List<Line>? = null) {
+        Trace.i("voice", "${character.name} speaks ${text.length} chars")
         val use = if (!lines.isNullOrEmpty()) lines else splitByPunctuation(text)
         speakLines(use, character)
     }

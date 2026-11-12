@@ -64,6 +64,7 @@ class SessionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Trace.init(this)
         progress = Progress(this)
         week = intent.getIntExtra("week", 1)
         dayNo = intent.getIntExtra("day", 0)
@@ -131,6 +132,8 @@ class SessionActivity : Activity() {
 
     private fun stepOverview(s: JSONObject) {
         inOverview = true
+        Trace.where = "week $week day $dayNo · part $sid · overview"
+        Trace.i("screen", "overview of part \"${s.optString("title")}\" (resume at step ${progress.pos(week, dayNo, sid) + 1})")
         needVoice(false)
         content.removeAllViews()
         val who = s.optString("mode").let { m -> if (m == "video" || m == "phone" || m == "face") Ui.character(steps.firstOrNull()?.optString("who") ?: "sam", 0) else null }
@@ -213,6 +216,7 @@ class SessionActivity : Activity() {
 
     /** ← keeps the exact step, so Continue on Home brings him back here (QA 11 Nov). */
     private fun leave() {
+        Trace.i("button", "‹ back · leaves part $sid at step ${index + 1}${if (inOverview) " (overview)" else ""}")
         if (sid != "sayagain" && sid != "reactions" && !inOverview && !progress.isDone(week, dayNo, sid)) progress.setPos(week, dayNo, sid, index)
         finish()
     }
@@ -308,6 +312,8 @@ class SessionActivity : Activity() {
         inOverview = false
         if (i >= steps.size) { finishSession(); return }
         index = i
+        Trace.where = "week $week day $dayNo · part $sid · step ${i + 1}/${steps.size} (${steps[i].optString("type")})"
+        Trace.i("screen", "step ${i + 1}/${steps.size}: ${steps[i].optString("type")} · ${steps[i].optString("prompt", steps[i].optString("title", steps[i].optString("topic"))).take(120)}")
         if (sid != "sayagain" && sid != "reactions") progress.setPos(week, dayNo, sid, i)
         content.removeAllViews()
         setBottom(null)
@@ -444,41 +450,59 @@ class SessionActivity : Activity() {
     // ---- Day 0: mic check + agreement on one screen ----
 
     private fun stepVoiceCheck(s: JSONObject) {
+        if (s.optString("type") == "agree") { stepAgree(s); return }
         day0Header()
-        needVoice(true, "Mic check: say the sentence above")
+        needVoice(true, "Tap the mic and say the sentence")
         val mic = Ui.card(this)
         mic.addView(Ui.caps(this, "Mic check"))
-        mic.addView(text("Say: “My name is … and I love movies.”", 16f, Ui.ink, true), Ui.lp(this, 8))
-        val heard = text("", 15f, Ui.ink).apply { background = Ui.rounded(this@SessionActivity, Ui.cream, 10); setPadding(dp(12), dp(10), dp(12), dp(10)); visibility = View.GONE }
+        mic.addView(text("Say: “My name is … and I'm from …”", 18f, Ui.ink, true), Ui.lp(this, 6))
+        mic.addView(text("Tap the mic, say it, then tap ↑.", 14f, Ui.muted), Ui.lp(this, 8))
+        val heard = text("", 15f, Ui.ink).apply { background = Ui.rounded(this@SessionActivity, Ui.tealRow, 12); setPadding(dp(12), dp(10), dp(12), dp(10)); visibility = View.GONE }
         mic.addView(heard, Ui.lp(this, 10))
-        mic.addView(text("Right? If not, just say it again. The app is learning your voice.", 13f, Ui.muted), Ui.lp(this, 10))
+        val ok = text("✓  Heard you clearly", 14f, Ui.green).apply { visibility = View.GONE }
+        mic.addView(ok, Ui.lp(this, 8))
         add(mic, 12)
+        val tipV = Ui.tip(this, "Speak normally, as if to a friend. Hold the phone about 20 cm away.")
+        add(tipV, 10)
+        val after = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val r = Ui.row(this)
+        r.addView(Ui.button(this, "Say it again", outline = true) { show(index) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        r.addView(Ui.button(this, "Next") { Trace.i("button", "mic check Next"); next() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+        after.addView(r)
+        after.addView(text("Wrong words? Say it again. The app gets used to your voice.", 14f, Ui.muted), Ui.lp(this, 12))
+        add(after, 12)
         onAnswer = { said ->
             val t = TalkBar.plain(said)
-            heard.text = "We heard: “$t”"; heard.visibility = View.VISIBLE
+            Trace.i("mic check", "heard \"$t\" · ${talk.lastTurnInfo}")
+            heard.text = t; heard.visibility = View.VISIBLE
+            ok.visibility = if (t.split(" ").size >= 4) View.VISIBLE else View.GONE
             Regex("(?i)my name is ([A-Za-z]+)").find(t)?.groupValues?.get(1)?.let { n ->
                 getSharedPreferences("progress", MODE_PRIVATE).edit().putString("name", n).apply()
             }
             talk.reset()
+            tipV.visibility = View.GONE
+            after.visibility = View.VISIBLE
         }
-        val agree = steps.firstOrNull { it.optString("type") == "agree" } ?: s
+    }
+
+    /** The agreement on its own screen (1.2 findings 3 and 7): through the mentor, tools named, no Sinhala, no talk bar. */
+    private fun stepAgree(s: JSONObject) {
+        day0Header()
+        needVoice(false)
         val ag = Ui.card(this)
-        val hr = Ui.row(this)
-        hr.addView(Ui.caps(this, "Agreement"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val en = agree.optString("en").ifBlank { PRIVACY_EN }
-        val si = agree.optString("si").ifBlank { PRIVACY_SI }
-        val body = text(en, 15f, Ui.ink, true)
-        hr.addView(Ui.enSiSwitch(this) { x -> body.text = if (x) si else en })
-        ag.addView(hr)
-        ag.addView(body, Ui.lp(this, 8))
-        ag.addView(text("Camera: we'll ask you separately, just before your first video call. Your picture is never sent.", 13f, Ui.muted), Ui.lp(this, 10))
-        ag.addView(Ui.button(this, "I agree") {
+        ag.addView(Ui.caps(this, "How your practice is used"))
+        ag.addView(text(s.optString("en").ifBlank { PRIVACY_EN }, 15f, Ui.ink), Ui.lp(this, 8))
+        ag.addView(text("Camera: asked separately, before your first video call. Your picture is never sent.", 13.5f, Ui.muted), Ui.lp(this, 10))
+        add(ag, 12)
+        add(Ui.siTip(this, "Next: \"Asking is OK\", a quick listening check, and your first shadowing."), 10)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(Ui.button(this, "I agree") {
+            Trace.i("button", "I agree")
             progress.putString("agreed", System.currentTimeMillis().toString())
-            val j = steps.indexOfFirst { it.optString("type") == "agree" }
-            show(maxOf(index, j) + 1)
-        }, Ui.lp(this, 14))
-        add(ag, 14)
-        day0Footer()
+            next()
+        })
+        box.addView(Ui.link(this, "Back to Home") { leave() }.apply { gravity = Gravity.CENTER }, Ui.lp(this, 2))
+        setBottom(box)
     }
 
     // ---- drills ----
@@ -772,6 +796,7 @@ class SessionActivity : Activity() {
         if (resultCode == RESULT_CANCELED) { show(index); return }   // "Not now" on the ringing screen
         val transcript = data?.getStringExtra("transcript") ?: "[]"
         val turns = data?.getIntExtra("turns", 0) ?: 0
+        Trace.i("conversation", "back from the conversation · $turns turns · result ${if (resultCode == RESULT_OK) "ok" else "cancelled"}")
         val who = Ui.character(s.optString("who", "sam"), index)
         if (turns > 0) progress.add("conversations")
         content.removeAllViews()
@@ -856,6 +881,8 @@ class SessionActivity : Activity() {
     }
 
     private fun partDone(line: String?) {
+        Trace.i("part", "done: ${session?.optString("title")} (week $week day $dayNo)")
+        Trace.send("auto · part done: ${session?.optString("title")}")
         needVoice(false)
         content.removeAllViews()
         header(session?.optString("title") ?: "", "Done", null)
@@ -996,7 +1023,8 @@ class SessionActivity : Activity() {
             running = false
             val f = recorder?.stop(); recorder = null
             setBottom(null)
-            if (f == null || total < 2000) { Ui.toast(this, "That was very short. Try again."); show(index); return@setOnClickListener }
+            if (f == null || total < 2000) { Trace.w("recording", "too short (${total} ms, file ${f != null})"); Ui.toast(this, "That was very short. Try again."); show(index); return@setOnClickListener }
+            Trace.i("recording", "finished · ${total / 1000} s")
             val wait = text("Listening to your recording…", 14f, Ui.muted); add(wait, 12)
             thread {
                 val r = runCatching { Ai.askAudio(this, RECORD_COACH, "Topic: $topic\nLast time (may be empty): ${prev?.optString("words") ?: ""}\n" +
@@ -1071,6 +1099,7 @@ class SessionActivity : Activity() {
             talk.reset()
             val score = overlap(TalkBar.plain(said), line)
             val keptUp = lineEndAt > 0 && micAt - lineEndAt in -3000..2500
+            Trace.i("shadow", "line \"$line\" · he said \"${TalkBar.forAi(said)}\" · ${talk.lastTurnInfo} · match ${"%.2f".format(score)} · kept up $keptUp")
             progress.log("answerLog", JSONObject().put("kind", "shadow").put("prompt", line).put("said", TalkBar.forAi(said))
                 .put("mark", if (score >= 0.7f) "good" else "try_again").put("where", "w${week}d$dayNo"))
             if (score >= 0.7f || miss >= 2) { progress.add("shadowLines"); stepShadow(s, who, k + 1, (score >= 0.85f) to keptUp) }
@@ -1172,7 +1201,7 @@ class SessionActivity : Activity() {
                 running = false
                 val f = recorder?.stop(); recorder = null
                 setBottom(null)
-                if (f == null || total < 3000) { Ui.toast(this, "That was very short. Try the round again."); stepTalk321(s, round) }
+                if (f == null || total < 3000) { Trace.w("3-2-1", "round too short (${total} ms, file ${f != null})"); Ui.toast(this, "That was very short. Try the round again."); stepTalk321(s, round) }
                 else {
                     val wait = text("Listening to round ${round + 1}…", 14f, Ui.muted); add(wait, 12)
                     val secs = total / 1000
@@ -1186,6 +1215,7 @@ class SessionActivity : Activity() {
                                 .put("wpm", if (secs > 0) (words * 60 / secs).toInt() else 0)
                                 .put("pausesPerMin", if (secs > 0) j.optInt("long_pauses") * 60.0 / secs else 0.0)
                             rounds.add(j)
+                            Trace.i("3-2-1", "round ${round + 1} · ${secs} s · ${words} words · ${j.optInt("wpm")} wpm · long pauses ${j.optInt("long_pauses")} · \"${j.optString("transcript").take(400)}\"")
                             stepTalk321(s, round + 1)
                         }
                     }
@@ -1464,7 +1494,8 @@ class SessionActivity : Activity() {
             val r = runCatching { Ai.ask(this, system, user) }
             main.post {
                 if (isFinishing) return@post
-                r.onSuccess(done).onFailure {
+                r.onSuccess { j -> Trace.i("coach", "mark ${j.optString("mark")} · ${j.toString().take(600)}"); done(j) }.onFailure {
+                    Trace.e("coach", "could not check (shown: \"The coach couldn't check this right now\") · $it")
                     talk.enabled = true
                     getSharedPreferences("settings", MODE_PRIVATE).edit().putString("lastProblem", it.message ?: it.toString()).apply()
                     add(text("The coach couldn't check this right now (internet?). Let's carry on.", 14f, Ui.orangeDark), 8)
@@ -1475,6 +1506,7 @@ class SessionActivity : Activity() {
     }
 
     private fun logAnswer(kind: String, prompt: String, said: List<Pair<String, Boolean>>, mark: String) {
+        Trace.i("answer", "$kind · to \"$prompt\" · he said \"${TalkBar.forAi(said)}\" · ${talk.lastTurnInfo} · mark $mark")
         progress.add("answers")
         if (mark == "good") progress.add("good")
         progress.log("answerLog", JSONObject().put("kind", kind).put("prompt", prompt).put("said", TalkBar.forAi(said)).put("mark", mark).put("where", "w${week}d$dayNo"))
@@ -1489,12 +1521,12 @@ class SessionActivity : Activity() {
     }
 
     companion object {
-        const val PRIVACY_EN = "Your voice goes to Google's speech service, which turns it into words. Your words go to Google's free Gemini AI, " +
-            "so Sam and Maya can understand and help you. Google may use what you say on the free service to improve its AI, so don't say " +
-            "private things like passwords or bank numbers. Your recordings, words and results stay on this phone until you remove the app."
-        const val PRIVACY_SI = "ඔබේ හඬ Google හි කථන සේවාවට යයි; එය ඔබේ කතාව වචන බවට පත් කරයි. ඔබේ වචන Google හි නොමිලේ ලැබෙන Gemini AI වෙත යයි, " +
-            "Sam සහ Maya ට ඔබව තේරුම් ගෙන උදව් කිරීමට. නොමිලේ සේවාවේදී ඔබ කියන දේ Google තම AI දියුණු කිරීමට භාවිතා කළ හැකියි, එබැවින් " +
-            "මුරපද හෝ බැංකු අංක වැනි පුද්ගලික දේ කියන්න එපා. ඔබේ හඬ පටිගත කිරීම්, වචන සහ ප්‍රතිඵල ඔබ යෙදුම ඉවත් කරන තුරු මෙම දුරකථනයේම තිබේ."
+        const val PRIVACY_EN = "Your mentor follows your practice to help you improve. He uses these tools:\n" +
+            "• Google speech recognition turns your voice into words.\n" +
+            "• Google's voices read Sam's and Maya's words aloud.\n" +
+            "• Gemini (Google's AI) plays Sam and Maya, checks your answers and plans your next day. Google may use what is sent to Gemini to improve its services.\n" +
+            "• Claude (an AI assistant) helps your mentor read your practice, find problems and make the app better.\n" +
+            "The text of your talks goes to your mentor and these tools. Your voice recordings stay on this phone."
 
         private const val BASE = "You are a warm spoken-English coach for a Sinhala-speaking student (about 20, Sri Lanka) who understands English but freezes when speaking. " +
             "His answers come from speech recognition: never treat a misheard word as his mistake, never comment on accent or pronunciation. Fluency first; only ONE point at a time. " +

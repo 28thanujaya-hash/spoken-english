@@ -57,7 +57,8 @@ object Memory {
         val user = "His name: $me\nPartner: $who\nMode: $mode (video/phone = a call)\n" +
             (scene?.let { "Scene: ${it.optString("en")}\nHis goal: ${it.optString("goal")}\n" } ?: "A free chat.\n") +
             "Today's phrases: ${Lessons.day(week, day)?.optJSONArray("phrases") ?: "[]"}\n\nConversation:\n$text"
-        val r = runCatching { Ai.ask(ctx, SUMMARY, user) }.getOrElse { JSONObject().put("summary", "Your conversation with $who is saved.") }
+        val r = runCatching { Ai.ask(ctx, SUMMARY, user) }.getOrElse { Trace.w("summary", "failed: $it"); JSONObject().put("summary", "Your conversation with $who is saved.") }
+        Trace.i("summary", "$title with $who: ${r.optString("summary").replace("\n", " ").take(800)} · well ${r.optJSONArray("well_done")} · better ${r.optJSONArray("better")}")
         saveChat(ctx, p, who, title, mode, transcript, r.optString("summary"), week, day)
         applyEvaluation(p, r, "conversation: $title", week, day)
         return r
@@ -191,7 +192,8 @@ object Memory {
         user.append("\nMISTAKES THAT CAME BACK MOST: ${topMistakes(p)}\n")
         user.append("Phrases he avoids: ${english(p).optJSONObject("phrasesAvoided")}\n")
         user.append("Words he needed Sinhala for: ${sinhalaWords(p).take(15).joinToString { "${it.second}=${it.first}" }}\n")
-        val r = runCatching { Ai.ask(ctx, PLANNER, user.toString()) }.getOrNull() ?: return
+        val r = runCatching { Ai.ask(ctx, PLANNER, user.toString()) }.getOrElse { Trace.w("planner", "failed for w${week}d$d: $it"); null } ?: return
+        Trace.i("planner", "plan for w${week}d$d: ${r.toString().take(1500)}")
         r.put("madeAt", System.currentTimeMillis())
         p.putString("plan:w${week}d$d", r.toString())
         r.optString("changed_line").takeIf { it.isNotBlank() }?.let { p.log("changes", JSONObject().put("line", "Day $d: $it")) }

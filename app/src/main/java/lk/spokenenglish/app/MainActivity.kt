@@ -116,6 +116,9 @@ class MainActivity : Activity() {
         intent.getStringExtra("partner")?.let { n -> if (n == "Sam") partner = Characters.SAM else if (n == "Maya") partner = Characters.MAYA }
         prefs.edit().putInt("chats", count + 1).apply()
 
+        Trace.init(this)
+        Trace.where = (intent.getStringExtra("where") ?: "free chat") + " · conversation"
+        Trace.i("screen", "conversation opens · mode $mode · partner ${partner.name} · scene ${scene?.optString("title") ?: "free chat"} · week $week day $dayNo")
         buildUi()
         shake = ShakeReport(this) { intent.getStringExtra("where")?.let { "$it (conversation)" } ?: "Free chat" }
         courseDay()
@@ -393,9 +396,10 @@ class MainActivity : Activity() {
 
     private fun stopRing() { runCatching { ringTone?.stopTone(); ringTone?.release() }; ringTone = null }
 
-    private fun cancelCall() { stopRing(); setResult(RESULT_CANCELED); finish() }
+    private fun cancelCall() { Trace.i("video call", "Not now"); stopRing(); setResult(RESULT_CANCELED); finish() }
 
     private fun acceptCall() {
+        Trace.i("video call", "accepted")
         stopRing()
         (ringScreen?.parent as? ViewGroup)?.removeView(ringScreen); ringScreen = null
         callStart = SystemClock.elapsedRealtime(); main.post(callTick)
@@ -407,6 +411,7 @@ class MainActivity : Activity() {
 
     /** Once per call her voice cuts out for a moment, so he practises asking her to repeat. */
     private fun cutOut(reply: String) {
+        Trace.i("video call", "line cut out (reply not spoken): \"$reply\"")
         cutting = true
         cutOverlay?.visibility = View.VISIBLE
         if (android.os.Build.VERSION.SDK_INT >= 31) callFace?.setRenderEffect(android.graphics.RenderEffect.createBlurEffect(30f, 30f, android.graphics.Shader.TileMode.CLAMP))
@@ -511,6 +516,7 @@ class MainActivity : Activity() {
 
     /** Finish / End call: back to the lesson with the conversation, for the result screen. */
     private fun finishScene() {
+        Trace.i("conversation", "finished · $turnsSent turns · mode $mode")
         stopRing()
         talk.reset()
         voice.stop()
@@ -518,7 +524,7 @@ class MainActivity : Activity() {
         // A free chat from Home is stored and summarised here (lesson chats are summarised by the lesson; finding 3)
         if (scene == null && turnsSent > 0) {
             val ctx = applicationContext; val p = progress; val who = partner.name; val t = org.json.JSONArray(transcript.toString()); val w = week; val d = dayNo
-            thread { runCatching { Memory.summarize(ctx, p, who, "Free chat", "free", null, t, w, d) } }
+            thread { runCatching { Memory.summarize(ctx, p, who, "Free chat", "free", null, t, w, d) }; Trace.send("auto · free chat ended") }
         }
         setResult(RESULT_OK, android.content.Intent().putExtra("transcript", transcript.toString()).putExtra("turns", turnsSent))
         finish()
@@ -530,7 +536,7 @@ class MainActivity : Activity() {
         val sc = scene
         history.clear(); messages.removeAllViews()
         if (sc != null && sc.optString("type") == "freechat") addIdeas(sc)
-        if (sc == null) addIdeas(JSONObject().put("ideas", org.json.JSONArray(listOf("A film you watched recently", "Your plans for the weekend", "Marvel or Batman?"))))
+        if (sc == null) addIdeas(JSONObject().put("ideas", org.json.JSONArray(listOf("Your weekend", "Food you love", "Your family", "A film you liked"))))
         face.character = partner; face.mood = "happy"
         partnerStatus.text = "${partner.name} is listening"
         silenceStage = 0; talk.hideNudge()
@@ -559,8 +565,10 @@ class MainActivity : Activity() {
     private fun addIdeas(sc: JSONObject) {
         val ideas = sc.optJSONArray("ideas") ?: return
         if (ideas.length() == 0) return
-        messages.addView(Ui.caps(this, "Ideas to talk about"), Ui.lp(this, 6))
-        messages.addView(Ui.label(this, "Say one of these, or talk about anything you like.", 13f, Ui.muted), Ui.lp(this, 2))
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        ideasBox = box
+        box.addView(Ui.caps(this, "Ideas to talk about"), Ui.lp(this, 6))
+        box.addView(Ui.label(this, "Say one of these, or talk about anything you like.", 13f, Ui.muted), Ui.lp(this, 2))
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         var row: LinearLayout? = null
         for (i in 0 until ideas.length()) {
@@ -569,15 +577,22 @@ class MainActivity : Activity() {
             row!!.addView(Ui.label(this, idea, 14f, Ui.ink, true).apply {
                 background = Ui.ripple(this@MainActivity, Ui.rounded(this@MainActivity, Ui.surface, 14, Ui.line), 14)
                 setPadding(dp(12), dp(12), dp(12), dp(12))
-                setOnClickListener { Ui.tap(it); if (!talk.isTalking && !waitingReply) askPartner("(He picked the topic: $idea. Start talking about it with him, and ask him something.)", nudge = true) }
+                setOnClickListener { Ui.tap(it); if (!talk.isTalking && !waitingReply) { Trace.i("button", "idea tile: $idea"); hideIdeas(); askPartner("(He picked the topic: $idea. Start talking about it with him, and ask him something.)", nudge = true) } }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { if (i % 2 == 1) marginStart = dp(8) })
         }
         if (ideas.length() % 2 == 1) row?.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { marginStart = dp(8) })
-        messages.addView(grid)
+        box.addView(grid)
+        messages.addView(box)
     }
+
+    private var ideasBox: View? = null
+    /** The idea tiles go once the chat has started (1.2 finding 5). */
+    private fun hideIdeas() { ideasBox?.let { (it.parent as? ViewGroup)?.removeView(it) }; ideasBox = null }
 
     private fun sendTurn(said: List<Pair<String, Boolean>>) {
         val text = TalkBar.forAi(said)
+        Trace.i("he said", "\"$text\" · ${talk.lastTurnInfo}")
+        hideIdeas()
         if (Ui.isAgainRequest(TalkBar.plain(said)) && !TalkBar.hasSinhala(said)) progress.add("againRequests")
         pendingBubble = addMyBubble(said)
         pendingTurn = said
@@ -626,7 +641,7 @@ class MainActivity : Activity() {
 
     private fun askPartner(text: String, nudge: Boolean) {
         val key = apiKey()
-        if (key.isBlank()) { addNote("The AI key is missing. Tell your mentor."); return }
+        if (key.isBlank()) { Trace.e("ai", "Gemini key missing"); addNote("The AI key is missing. Tell your mentor."); return }
         history.add("user" to text)
         waitingReply = true
         val seq = ++requestSeq
@@ -661,6 +676,7 @@ class MainActivity : Activity() {
                     if (!nudge) silenceStage = 0
                     face.mood = r.mood
                     partnerStatus.text = statusFor(r.mood)
+                    Trace.i("${partner.name}", "\"${r.text}\" (mood ${r.mood}${if (r.laugh) ", laughs" else ""})")
                     addPartnerBubble(r.text, r.lines)
                     transcript.put(JSONObject().put("who", partner.name).put("text", r.text))
                     val coached = r.coachSi.isNotBlank() && (r.coachEn.isNotBlank() || r.coachSentence.isNotBlank())
@@ -673,6 +689,7 @@ class MainActivity : Activity() {
                     face.mood = "neutral"
                     partnerStatus.text = "${partner.name} is listening"
                     prefs.edit().putString("lastProblem", e.message ?: e.toString()).apply()
+                    Trace.e("conversation", "no reply shown: ${friendlyProblem(e)} · $e")
                     if (!nudge) addNote(friendlyProblem(e))
                     if (mode == "video") { setPill(friendlyProblem(e)); main.postDelayed({ talk.listen() }, 1500) }
                 }
@@ -690,9 +707,16 @@ class MainActivity : Activity() {
         for (model in chain) {
             val until = prefs.getLong("limited_$model", 0L)
             if (System.currentTimeMillis() < until) { lastError = GeminiClient.HttpError(429, "limit reached for $model"); continue }
+            val t0 = System.currentTimeMillis()
+            Trace.aiRequest("${partner.name} reply (turn $turnsSent, mode $mode)", model, system,
+                snapshot.joinToString("\n") { "${it.first}: ${it.second}" })
             try {
-                return Result.success(GeminiClient(key, model).reply(system, snapshot))
+                val r = GeminiClient(key, model).reply(system, snapshot)
+                Trace.aiReply("reply=${r.text} | mood=${r.mood} laugh=${r.laugh} | better=${r.betterSentence} (${r.betterWrong}→${r.betterRight}) | coach=${r.coachSi}→${r.coachEn} | facts=${r.facts}")
+                Trace.i("ai", "${partner.name} replied in ${System.currentTimeMillis() - t0} ms · $model")
+                return Result.success(r)
             } catch (e: GeminiClient.HttpError) {
+                Trace.w("ai", "${partner.name} reply failed · $model · HTTP ${e.code} · ${System.currentTimeMillis() - t0} ms · ${e.body.take(200)}")
                 lastError = e
                 if (e.code == 429) {
                     val restUntil = if (e.perDay) nextPacificMidnight() else System.currentTimeMillis() + 60_000
@@ -701,9 +725,11 @@ class MainActivity : Activity() {
                 }
                 return Result.failure(e)
             } catch (e: Exception) {
+                Trace.e("ai", "${partner.name} reply error · $model · ${System.currentTimeMillis() - t0} ms · $e")
                 return Result.failure(e)
             }
         }
+        Trace.e("ai", "${partner.name}: no model available · $lastError")
         return Result.failure(lastError)
     }
 
@@ -766,7 +792,7 @@ class MainActivity : Activity() {
     private fun onSilentAfterPartner() {
         if (talk.isTalking || waitingReply || partnerTalking || laughing) return
         when (silenceStage) {
-            0 -> { silenceStage = 1; askPartner("(He has been silent for 8 seconds. Help him start.)", nudge = true) }
+            0 -> { silenceStage = 1; Trace.i("silence", "8 s quiet after partner → nudge"); askPartner("(He has been silent for 8 seconds. Help him start.)", nudge = true) }
             1 -> { silenceStage = 2; talk.showNudge("Stuck? Tap සිං and say it in Sinhala."); talk.pulseSinhala() }
         }
     }
@@ -850,6 +876,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- cards
 
     private fun addCoachCard(r: GeminiClient.Reply) {
+        Trace.i("card", "Sinhala help: ${r.coachSi} → ${r.coachEn} · ${r.coachSentence}")
         if (!talk.showWords) { saveCoachQuiet(r); return }   // calls: voice only
         val sentence = r.coachSentence.ifBlank { r.coachEn }
         val english = r.coachEn.ifBlank { sentence }
@@ -876,6 +903,7 @@ class MainActivity : Activity() {
     /** Teal "Better English" card, shown silently (Sam and Maya never correct out loud; mentor 11 Nov). */
     private fun addBetterCard(r: GeminiClient.Reply) {
         appendJson("grammarLog", r.betterSaid, r.betterRight, r.betterSentence)
+        Trace.i("card", "Better English${if (!talk.showWords) " (not shown: voice-only mode)" else ""}: \"${r.betterSaid}\" → \"${r.betterSentence}\" · why: ${r.betterWhy}")
         if (!talk.showWords) return
         val card = Ui.edgeCard(this)
         card.addView(label("BETTER ENGLISH", 12f, Ui.muted, bold = true).apply { letterSpacing = 0.06f })

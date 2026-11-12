@@ -121,6 +121,8 @@ class ShakeReport(private val a: Activity, private val where: () -> String) : Se
     }
 
     private fun send(kind: String, audio: File?) {
+        Trace.i("shake", "report: $kind${if (audio != null) " (voice note on WhatsApp)" else ""}")
+        Trace.send("shake · $kind")
         val text = "Spoken English app · $kind\nWhere: ${where()}\nApp version: ${BuildConfig.VERSION_NAME}" +
             (if (audio == null) "\n(no voice message)" else "\n(voice message attached)")
         val uri: Uri? = if (audio != null && Build.VERSION.SDK_INT >= 29) runCatching {

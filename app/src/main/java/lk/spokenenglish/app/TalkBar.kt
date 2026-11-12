@@ -79,6 +79,9 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
     var showWords = true
     /** True when Google wasn't sure about some of the words in the last sent turn. */
     var lastTurnUnsure = false
+    /** For the report: how long he spoke, Sinhala parts, lowest confidence. */
+    var lastTurnInfo = ""
+    private var turnStartAt = 0L
         private set
 
     var enabled = true
@@ -221,7 +224,8 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
     private fun micTap() {
         if (!enabled || finishing || recording) return
         onBeforeTurn?.invoke()
-        if (!inTurn) { segments.clear(); partial = ""; inTurn = true; minConfidence = 1f }
+        if (!inTurn) { segments.clear(); partial = ""; inTurn = true; minConfidence = 1f; turnStartAt = SystemClock.elapsedRealtime() }
+        Trace.i("mic", "listening (${if (sinhala) "Sinhala" else "English"})")
         start()
     }
 
@@ -231,10 +235,11 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
         stopPulse()
         if (!inTurn) {
             setSinhala(si)
-            if (si) { segments.clear(); partial = ""; inTurn = true; minConfidence = 1f; start() }
+            if (si) { segments.clear(); partial = ""; inTurn = true; minConfidence = 1f; turnStartAt = SystemClock.elapsedRealtime(); Trace.i("mic", "listening (Sinhala)"); start() }
             return
         }
         if (si == sinhala) return
+        Trace.i("mic", "switch to ${if (si) "Sinhala" else "English"}")
         setSinhala(si)
         if (recording) {
             switchPending = true
@@ -287,10 +292,11 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
     private fun deliver() {
         val said = segments.toList()
         lastTurnUnsure = minConfidence < UNSURE
+        lastTurnInfo = "spoke ${(SystemClock.elapsedRealtime() - turnStartAt) / 1000} s · ${said.size} part(s) · Sinhala parts ${said.count { it.second }} · lowest confidence ${"%.2f".format(minConfidence)}${if (lastTurnUnsure) " (unsure)" else ""}"
         inTurn = false; segments.clear(); partial = ""
         showIdle()
         setSinhala(false)
-        if (said.isEmpty()) { Ui.toast(a, "I didn't hear anything. Tap the mic and try again."); onIdle?.invoke(); return }
+        if (said.isEmpty()) { Trace.w("mic", "send with nothing heard"); Ui.toast(a, "I didn't hear anything. Tap the mic and try again."); onIdle?.invoke(); return }
         onSend(said)
     }
 
@@ -298,7 +304,7 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
         override fun run() {
             if (!recording || finishing || readyPending) return
             val quiet = SystemClock.elapsedRealtime() - lastVoiceAt
-            if (autoSendMs > 0 && !sinhala && quiet >= autoSendMs && (segments.isNotEmpty() || partial.isNotBlank())) { send(); return }
+            if (autoSendMs > 0 && !sinhala && quiet >= autoSendMs && (segments.isNotEmpty() || partial.isNotBlank())) { Trace.i("mic", "auto-send after ${quiet} ms quiet"); send(); return }
             if (autoSendMs == 0L && !recordNudge && quiet >= 6000) {
                 recordNudge = true
                 showNudge("Take your time. Keep going, or tap සිං and say it in Sinhala.")
@@ -325,7 +331,7 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
     override fun onSegment(text: String, sinhala: Boolean) { segments.add(text to sinhala); partial = ""; heard(); refreshLive() }
     override fun onConfidence(score: Float) { if (!sinhala) minConfidence = minOf(minConfidence, score) }
     override fun onLevel(rmsDb: Float) { bars.push(rmsDb); if (rmsDb > 4f) heard() }
-    override fun onProblem(message: String) = Ui.toast(a, message)
+    override fun onProblem(message: String) { Trace.w("mic", "problem: $message"); Ui.toast(a, message) }
     override fun onFinished() {
         recording = false; finishing = false
         main.removeCallbacks(silenceCheck)

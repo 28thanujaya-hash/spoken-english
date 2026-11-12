@@ -40,6 +40,8 @@ class HomeActivity : Activity() {
         super.onCreate(savedInstanceState)
         // If the app ever closes by itself, the reason is kept and goes into the mentor's report.
         val ctx = applicationContext
+        Trace.init(this)
+        Trace.uploadPending()
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         if (prev !is CrashKeeper) Thread.setDefaultUncaughtExceptionHandler(CrashKeeper(ctx, prev))
         progress = Progress(this)
@@ -58,6 +60,7 @@ class HomeActivity : Activity() {
         thread {
             val ok = Lessons.load(this)
             if (ok) progress.freshStartIfNeeded(Lessons.version)
+            if (ok) Trace.i("lessons", "loaded, version ${Lessons.version}") else Trace.w("lessons", "could not load lessons")
             main.post {
                 loaded = ok
                 if (!ok) {
@@ -99,6 +102,8 @@ class HomeActivity : Activity() {
     private fun render() {
         tabs.forEachIndexed { i, t -> t.setTextColor(if (i == tab) Ui.teal else Ui.muted) }
         body.removeAllViews()
+        Trace.where = "home · tab ${listOf("Home", "Progress", "Me").getOrElse(tab) { "?" }}"
+        Trace.i("screen", Trace.where)
         when (tab) { 0 -> home(); 1 -> progressTab(); else -> me() }
         scroll.scrollTo(0, 0)
     }
@@ -187,7 +192,6 @@ class HomeActivity : Activity() {
                 tc.addView(t(nd.optString("title"), 17f, Ui.ink, true), Ui.lp(this, 2))
                 add(tc, 10)
             }
-            add(practiceCard(1f, "Full day done!"), 10)
             anyTime(week, dayN, "Want more?")
             return
         }
@@ -219,9 +223,17 @@ class HomeActivity : Activity() {
         r.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         r.addView(Ui.smallButton(this, "Continue") { SessionActivity.start(this, week, dayN, next.optString("id")) })
         cc.addView(r, Ui.lp(this, 4))
+        // one dot per part of the day: ✓ done · ● next · ○ to come (1.2 finding 2: no numbers, no separate card)
+        val dots = android.text.SpannableStringBuilder()
+        sessions.forEach { sp ->
+            val done = progress.isDone(week, dayN, sp.optString("id"))
+            val isNext = sp == next
+            val st = dots.length
+            dots.append(if (done) "✓" else if (isNext) "●" else "○").append("  ")
+            dots.setSpan(android.text.style.ForegroundColorSpan(if (done) Ui.green else if (isNext) Ui.ink else Ui.muted), st, st + 1, 0)
+        }
+        cc.addView(t(dots, 15f), Ui.lp(this, 8))
         add(cc, 10)
-        val frac = if (sessions.isEmpty()) 0f else doneN.toFloat() / sessions.size
-        add(practiceCard(frac, when { doneN == 0 -> "Let's start!"; frac < 0.5f -> "A good start. Keep going!"; else -> "Nearly there!" }), 10)
         anyTime(week, dayN)
     }
 
@@ -423,6 +435,10 @@ class CrashKeeper(private val ctx: android.content.Context, private val prev: Th
             val sw = java.io.StringWriter(); e.printStackTrace(java.io.PrintWriter(sw))
             ctx.getSharedPreferences("progress", android.content.Context.MODE_PRIVATE).edit()
                 .putString("lastCrash", "${java.util.Date()} · ${BuildConfig.VERSION_NAME}\n" + sw.toString().take(4000)).commit()
+            Trace.e("crash", sw.toString().take(4000))
+            // write the report file now; it is uploaded the next time the app opens
+            val dir = java.io.File(ctx.filesDir, "reports").apply { mkdirs() }
+            java.io.File(dir, "r-${System.currentTimeMillis()}.txt").writeText("Report · CRASH · ${Trace.where} · ${java.util.Date()}\n" + Trace.report("crash"))
         }
         prev?.uncaughtException(t, e)
     }
