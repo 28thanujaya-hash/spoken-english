@@ -36,8 +36,8 @@ object Ui {
     val orangeDark = Color.parseColor("#FFB27A")
     val orangeLine = Color.parseColor("#6B4A2F")
     val ink = Color.parseColor("#E9EDEF")
-    val muted = Color.parseColor("#8696A0")
-    val line = Color.parseColor("#2A3942")
+    val muted = Color.parseColor("#A3B1BA")      // calmer, readable grey (QA 12 Nov)
+    val line = Color.parseColor("#3B4A54")       // lighter borders so cards and buttons show (1.1 finding 1)
     val green = Color.parseColor("#53D18A")
     val greenLight = Color.parseColor("#153B2A")
     val blue = Color.parseColor("#8AB4F8")
@@ -96,11 +96,43 @@ object Ui {
     /** A small grey caps heading inside a card or above a list ("THE SITUATION", "TODAY'S 4 SESSIONS"). */
     fun caps(c: Context, text: String, color: Int = muted) = label(c, text.uppercase(), 12f, color, true).apply { letterSpacing = 0.06f }
 
-    /** A green tip box (drawing: "Stuck at the start? …"). */
-    fun tip(c: Context, text: CharSequence) = label(c, text, 14f, tealText).apply {
-        background = rounded(c, tealLight, 14)
+    /** A tip: a grey card with 💡 (QA 12 Nov: tips grey, green only for buttons and ticks). */
+    fun tip(c: Context, text: CharSequence) = label(c, android.text.SpannableStringBuilder("💡  ").append(text), 14f, ink).apply {
+        background = rounded(c, surface, 14, line)
         setPadding(dp(c, 14), dp(c, 11), dp(c, 14), dp(c, 11))
     }
+
+    /** The Sinhala tip: orange text on a dark orange card. */
+    fun siTip(c: Context, text: CharSequence) = label(c, text, 14f, orangeDark).apply {
+        background = rounded(c, orangeLight, 14, orangeLine)
+        setPadding(dp(c, 14), dp(c, 11), dp(c, 14), dp(c, 11))
+    }
+
+    /** A normal dark card with a green left edge (instead of big green blocks; 1.1 finding 1). */
+    fun edgeCard(c: Context): LinearLayout = LinearLayout(c).apply {
+        orientation = LinearLayout.VERTICAL
+        val base = rounded(c, surface, 16, line)
+        val edge = GradientDrawable().apply {
+            setColor(teal)
+            cornerRadii = floatArrayOf(dp(c, 16).toFloat(), dp(c, 16).toFloat(), 0f, 0f, 0f, 0f, dp(c, 16).toFloat(), dp(c, 16).toFloat())
+        }
+        val layers = android.graphics.drawable.LayerDrawable(arrayOf(base, edge))
+        layers.setLayerWidth(1, dp(c, 4)); layers.setLayerGravity(1, Gravity.START or Gravity.FILL_VERTICAL)
+        background = layers
+        setPadding(dp(c, 18), dp(c, 14), dp(c, 16), dp(c, 14))
+    }
+
+    /** Small green or outlined button that wraps its text. */
+    fun smallButton(c: Context, text: String, filled: Boolean = true, onClick: () -> Unit) =
+        label(c, text, 14.5f, if (filled) Color.WHITE else teal, true).apply {
+            gravity = Gravity.CENTER; minHeight = dp(c, 42)
+            setPadding(dp(c, 16), dp(c, 6), dp(c, 16), dp(c, 6))
+            background = ripple(c, if (filled) rounded(c, teal, 12) else rounded(c, surface, 12, teal), 12)
+            setOnClickListener { tap(it); onClick() }
+        }
+
+    /** A round progress ring (no numbers for him: Home "Today's practice"). */
+    fun ring(c: Context, fraction: Float): View = RingView(c, fraction)
 
     /** A small rounded chip (badges, phrase chips, "Came back 3 times"). */
     fun chip(c: Context, text: String, fg: Int, bg: Int, size: Float = 12.5f) = label(c, text, size, fg, true).apply {
@@ -156,7 +188,7 @@ object Ui {
         val h = row(c).apply { setPadding(dp(c, 14), dp(c, 10), dp(c, 14), dp(c, 6)) }
         val back = label(c, "‹", 26f, teal, true).apply {
             gravity = Gravity.CENTER
-            background = ripple(c, rounded(c, tealLight, 12), 12)
+            background = ripple(c, rounded(c, surface, 12, line), 12)
             setOnClickListener { tap(it); onBack() }
         }
         h.addView(back, LinearLayout.LayoutParams(dp(c, 44), dp(c, 44)).apply { marginEnd = dp(c, 12) })
@@ -246,5 +278,16 @@ class AvatarView(ctx: Context, private val who: Character) : View(ctx) {
             c.drawArc(RectF(cx - s * 0.2f, cy - s * 0.3f, cx + s * 0.2f, cy + s * 0.12f), 150f, 60f, false, p)
             c.drawArc(RectF(cx - s * 0.2f, cy - s * 0.3f, cx + s * 0.2f, cy + s * 0.12f), -30f, 60f, false, p)
         }
+    }
+}
+
+/** Progress ring: green arc on a grey track. */
+class RingView(ctx: Context, private val fraction: Float) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    override fun onDraw(c: Canvas) {
+        val s = minOf(width, height).toFloat(); val w = s * 0.13f
+        val r = RectF((width - s) / 2f + w, (height - s) / 2f + w, (width + s) / 2f - w, (height + s) / 2f - w)
+        p.strokeWidth = w; p.color = Ui.line; c.drawArc(r, 0f, 360f, false, p)
+        p.color = Ui.teal; if (fraction > 0f) c.drawArc(r, -90f, 360f * fraction.coerceIn(0f, 1f), false, p)
     }
 }

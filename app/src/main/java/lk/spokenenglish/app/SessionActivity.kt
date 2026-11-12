@@ -93,16 +93,111 @@ class SessionActivity : Activity() {
                 if (s == null) { content.addView(Ui.label(this, "This lesson couldn't be loaded. Check the internet and try again.", 16f)); return }
                 val arr = s.getJSONArray("steps")
                 steps = (0 until arr.length()).map { arr.getJSONObject(it) }
+                steps = adapt(steps)
                 if (progress.shortDay()) steps = shorten(steps)
+                partStart = System.currentTimeMillis()
+                stepOverview(s); return
             }
         }
         show(progress.pos(week, dayNo, sid).coerceIn(0, maxOf(0, steps.size - 1)))
     }
 
+    private var partStart = 0L
+    private var inOverview = false
+    private var micAt = 0L
+    private var lineEndAt = 0L
+
+    /** The tomorrow planner's changes (1.1 finding 11): fix-it drills from his own sentences, extra shadowing lines. */
+    private fun adapt(all: List<JSONObject>): List<JSONObject> {
+        val plan = Memory.planFor(progress, week, dayNo) ?: return all
+        val out = all.map { JSONObject(it.toString()) }.toMutableList()
+        if (sid == "shadow") out.firstOrNull { it.optString("type") == "shadow" }?.let { sh ->
+            val extra = plan.optJSONArray("shadow_extra") ?: JSONArray()
+            for (k in 0 until minOf(2, extra.length())) sh.getJSONArray("lines").put(extra.getString(k))
+        }
+        if (sid == "phrases") {
+            val fix = plan.optJSONArray("fixit") ?: JSONArray()
+            val at = out.indexOfFirst { it.optString("type") == "drill" }.takeIf { it >= 0 } ?: out.size
+            val add = (0 until minOf(3, fix.length())).mapNotNull { fix.optJSONObject(it) }.mapIndexed { k, f ->
+                JSONObject().put("type", "drill").put("who", if (k % 2 == 0) "sam" else "maya").put("prompt", f.optString("prompt"))
+                    .put("models", f.optJSONArray("models") ?: JSONArray()).put("point", "From yesterday: " + f.optString("point")).put("fixit", true)
+            }
+            out.addAll(at, add)
+        }
+        return out
+    }
+
+    // ---- Session overview (the drawing's screen 2): why · what you'll do · today's phrases · Sinhala tip · Start ----
+
+    private fun stepOverview(s: JSONObject) {
+        inOverview = true
+        needVoice(false)
+        content.removeAllViews()
+        val who = s.optString("mode").let { m -> if (m == "video" || m == "phone" || m == "face") Ui.character(steps.firstOrNull()?.optString("who") ?: "sam", 0) else null }
+        header(s.optString("title"), overviewSub(s), who)
+        val why = Ui.card(this)
+        why.addView(Ui.caps(this, "Why"))
+        why.addView(text(s.optString("why"), 15f), Ui.lp(this, 4))
+        add(why, 8)
+        val what = s.optJSONArray("what") ?: JSONArray()
+        if (what.length() > 0) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "What you'll do"))
+            for (k in 0 until what.length()) {
+                val w = what.getJSONObject(k)
+                val r = Ui.row(this).apply { setPadding(0, dp(9), 0, dp(3)); gravity = Gravity.TOP }
+                r.addView(text("●", 12f, Ui.muted).apply { setPadding(0, dp(3), dp(12), 0) })
+                val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                col.addView(text(android.text.SpannableStringBuilder(w.optString("name")).apply {
+                    setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, length, 0); append(": " + w.optString("desc")) }, 15f))
+                col.addView(text(w.optString("mode"), 13.5f, Ui.muted))
+                r.addView(col)
+                c.addView(r)
+            }
+            add(c, 10)
+        }
+        val ph = day?.optJSONArray("phrases")
+        if (ph != null && ph.length() > 0 && (sid == "phrases" || sid == "talk" || sid == "talk321")) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "Today's phrases"))
+            c.addView(chipFlow(ph), Ui.lp(this, 6))
+            add(c, 10)
+        }
+        val m = Memory.planFor(progress, week, dayNo)?.optJSONArray("fixit")?.length() ?: 0
+        if (sid == "phrases" && m > 0) add(Ui.tip(this, "Today starts with a quick fix-it from your own sentences yesterday."), 10)
+        add(Ui.siTip(this, "Stuck? Tap සිං and say it in Sinhala. \"Again, please\" is always OK."), 10)
+        val pos = progress.pos(week, dayNo, sid)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(Ui.button(this, if (pos > 0) "Continue from where you stopped" else "Start") { show(pos.coerceIn(0, maxOf(0, steps.size - 1))) })
+        box.addView(Ui.link(this, "Back to Home") { finish() }.apply { gravity = Gravity.CENTER }, Ui.lp(this, 2))
+        setBottom(box)
+    }
+
+    private fun overviewSub(s: JSONObject): String = when (s.optString("id")) {
+        "talk" -> when (s.optString("mode")) { "video" -> "Video call"; "phone" -> "Phone call"; "free" -> "Free chat"; else -> "Face to face" }
+        "shadow" -> "Listen and echo"; "talk321" -> "Same topic, less time"; "listen" -> "Listen, answer, retell"; "review" -> "Say them again"
+        else -> day?.optString("title") ?: ""
+    }
+
+    /** Blue phrase chips that wrap onto new lines. */
+    private fun chipFlow(items: JSONArray): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var row = Ui.row(this); var used = 0
+        val maxChars = 34
+        for (k in 0 until items.length()) {
+            val t = items.getString(k)
+            if (used > 0 && used + t.length > maxChars) { box.addView(row, Ui.lp(this, 6)); row = Ui.row(this); used = 0 }
+            row.addView(Ui.chip(this, t, Ui.blue, Ui.blueLight, 13.5f), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+            used += t.length + 3
+        }
+        box.addView(row, Ui.lp(this, 6))
+        return box
+    }
+
     /** 45-minute day (QA 11 Nov): Learn about 15 min (3 drills), Talk about 20 (fewer turns), Free chat 10. */
     private fun shorten(all: List<JSONObject>): List<JSONObject> {
         var drills = 0
-        return all.filter { s -> if (sid == "learn" && s.optString("type") == "drill") { drills++; drills <= 3 } else true }
+        return all.filter { s -> if (sid == "phrases" && s.optString("type") == "drill") { drills++; drills <= 3 } else true }
             .map { s -> if (s.optString("type") == "chat") JSONObject(s.toString()).put("minTurns", maxOf(4, s.optInt("minTurns") / 2)) else s }
     }
 
@@ -118,7 +213,7 @@ class SessionActivity : Activity() {
 
     /** ← keeps the exact step, so Continue on Home brings him back here (QA 11 Nov). */
     private fun leave() {
-        if (sid != "sayagain" && sid != "reactions") progress.setPos(week, dayNo, sid, index)
+        if (sid != "sayagain" && sid != "reactions" && !inOverview && !progress.isDone(week, dayNo, sid)) progress.setPos(week, dayNo, sid, index)
         finish()
     }
 
@@ -135,7 +230,7 @@ class SessionActivity : Activity() {
         bottomBox = FrameLayout(this)
         root.addView(bottomBox)
         talk = TalkBar(this) { said -> handleAnswer(said) }
-        talk.onStart = { voice.stop() }
+        talk.onStart = { voice.stop(); micAt = SystemClock.elapsedRealtime() }
         root.addView(talk.view)
         Ui.fitSystemBars(root)
         setContentView(root)
@@ -210,6 +305,7 @@ class SessionActivity : Activity() {
     // ---------------------------------------------------------------- steps
 
     private fun show(i: Int) {
+        inOverview = false
         if (i >= steps.size) { finishSession(); return }
         index = i
         if (sid != "sayagain" && sid != "reactions") progress.setPos(week, dayNo, sid, i)
@@ -223,7 +319,10 @@ class SessionActivity : Activity() {
         val s = steps[i]
         val who = Ui.character(s.optString("who", day?.optString("companion") ?: "both"), i)
         when (s.optString("type")) {
-            "info" -> if (sid == "learn" && steps.getOrNull(i + 1)?.optString("type") == "model") stepLesson(s, steps[i + 1]) else stepInfo(s)
+            "info" -> if (sid == "phrases" && steps.getOrNull(i + 1)?.optString("type") == "model") stepLesson(s, steps[i + 1]) else stepInfo(s)
+            "shadow" -> stepShadow(s, who, 0)
+            "talk321" -> stepTalk321(s, 0)
+            "compare" -> stepCompare()
             "model" -> stepModel(s, who)
             "drill" -> stepDrill(s, who)
             "react" -> stepReact(s, who, 0, 0)
@@ -246,13 +345,12 @@ class SessionActivity : Activity() {
     private fun day0Header() {
         val parts = day0Parts()
         val n = parts.indexOfFirst { it.optString("id") == sid }.coerceAtLeast(0)
-        header("Getting started", "Day 0 · part ${n + 1} of ${parts.size}", null)
-        add(Ui.segments(this, parts.size, n, n), 0)
+        header(parts.getOrNull(n)?.optString("title") ?: "Getting started", "Day 0 · getting started", null)
     }
 
     private fun day0Footer() {
         val parts = day0Parts()
-        add(Ui.caps(this, "Day 0 · ${parts.size} short parts"), 20)
+        add(Ui.caps(this, "Day 0"), 20)
         val box = Ui.card(this).apply { setPadding(0, dp(4), 0, dp(4)) }
         parts.forEachIndexed { k, p ->
             val done = progress.isDone(week, 0, p.optString("id"))
@@ -262,8 +360,8 @@ class SessionActivity : Activity() {
                 gravity = Gravity.CENTER; background = Ui.rounded(this@SessionActivity, if (done) Ui.greenLight else Ui.surface2, 10) },
                 LinearLayout.LayoutParams(dp(36), dp(36)))
             val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
-            col.addView(text("${k + 1}. ${p.optString("title")}", 15f, Ui.ink, true))
-            p.optString("note").takeIf { it.isNotBlank() }?.let { col.addView(text(it, 12.5f, Ui.muted)) }
+            col.addView(text(p.optString("title"), 15f, Ui.ink, true))
+            if (done) col.addView(text("Done", 13f, Ui.muted)) else if (cur) col.addView(text("Now", 13f, Ui.muted))
             r.addView(col)
             box.addView(r)
         }
@@ -288,10 +386,9 @@ class SessionActivity : Activity() {
         val lines = model.optJSONArray("lines") ?: JSONArray()
         val say = (0 until lines.length()).joinToString(" ") { nameIn(lines.getString(it)) }
         val dayTitle = day?.optString("title")?.substringAfter(": ")?.substringBefore(" and ") ?: (session?.optString("title") ?: "Learn")
-        header(dayTitle.replaceFirstChar { it.uppercase() }, "Session 1 · Learn", who)
+        header("Phrases", "Listen · Understand · Practise", who)
         needVoice(true, "Say \"Again, please\" to hear ${who.name} once more")
-        val first = if (lines.length() > 0) lines.getString(0) else ""
-        add(text("“$first”", 26f, Ui.ink, true), 4)
+        add(text(day?.optString("title") ?: "", 20f, Ui.ink, true), 4)
         val labels = Ui.row(this)
         listOf("1. Listen", "2. Understand", "3. Practise").forEachIndexed { k, l ->
             labels.addView(text(l, 12.5f, if (k == 1) Ui.ink else Ui.muted, k == 1), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -310,23 +407,18 @@ class SessionActivity : Activity() {
         listenCard.addView(r, Ui.lp(this, 10))
         add(listenCard, 14)
         // 2. Understand
-        val uc = Ui.card(this, Ui.teal, 2)
+        val uc = Ui.card(this)
         val hr = Ui.row(this)
         hr.addView(Ui.caps(this, "2. Understand: when to use it"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val body = text(info.optString("en"), 15f, Ui.ink)
         if (info.optString("si").isNotBlank()) hr.addView(Ui.enSiSwitch(this) { si -> body.text = if (si) info.optString("si") else info.optString("en") })
         uc.addView(hr)
         uc.addView(body, Ui.lp(this, 10))
-        val conn = day?.optJSONArray("connectors")
-        if (conn != null && conn.length() > 0) {
-            val chips = Ui.row(this)
-            for (k in 0 until conn.length()) chips.addView(Ui.chip(this, conn.getString(k), Ui.blue, Ui.blueLight), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-            uc.addView(chips, Ui.lp(this, 12))
-        }
+        val conn = day?.optJSONArray("phrases") ?: day?.optJSONArray("connectors")
+        if (conn != null && conn.length() > 0) uc.addView(chipFlow(conn), Ui.lp(this, 8))
         add(uc, 12)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        box.addView(Ui.button(this, "Next: practise saying it") { show(index + 2) })
-        box.addView(text("Then you'll meet someone and talk (session 2)", 12.5f, Ui.muted).apply { gravity = Gravity.CENTER }, Ui.lp(this, 6))
+        box.addView(Ui.button(this, "Next: practise saying them") { show(index + 2) })
         setBottom(box)
         onPlayed = { heard++; upd() }
         upd()
@@ -347,11 +439,7 @@ class SessionActivity : Activity() {
         speak(who, say)
     }
 
-    private fun sessionSub(): String {
-        val sessions = day?.let { progress.sessionsFor(it) } ?: return ""
-        val n = sessions.indexOfFirst { it.optString("id") == sid }
-        return if (n >= 0) "Session ${n + 1} · ${session?.optString("title")}" else ""
-    }
+    private fun sessionSub(): String = day?.optString("title") ?: ""
 
     // ---- Day 0: mic check + agreement on one screen ----
 
@@ -409,15 +497,15 @@ class SessionActivity : Activity() {
             needVoice(true)
             when {
                 dayNo == 0 -> day0Header()
-                testMode -> header("Weekly test", "Day $dayNo · part ${partLetter(s)} of ${testParts().size}", who)
-                sid == "learn" -> header("Practise saying it", "Stage 3 of 3 · item ${k + 1} of ${drills.size}", who)
-                else -> header(session?.optString("title") ?: "Practise", "Item ${k + 1} of ${drills.size}", who)
+                testMode -> header("Weekly test", "Part ${partLetter(s)}", who)
+                sid == "phrases" -> header("Phrases", "Practise", who)
+                else -> header(session?.optString("title") ?: "Practise", sessionSub(), who)
             }
-            if (dayNo != 0) add(Ui.segments(this, drills.size, k, k), 0)
+            if (dayNo != 0 && !testMode) add(Ui.segments(this, drills.size, k + 1, k), 0)
             if (testMode) add(partCard(s, prompt), 12)
             if (situation) add(Ui.enSiCard(this, "Your turn", prompt.trim('(', ')'), "", Ui.teal), 12)
             else add(saysCard(who, prompt), 12)
-            if (s.optString("point").isNotBlank() && !testMode) add(Ui.enSiCard(this, "", s.optString("point"), s.optString("si")), 10)
+            if (s.optString("point").isNotBlank() && !testMode) add(if (s.optBoolean("fixit")) Ui.siTip(this, s.optString("point")) else Ui.enSiCard(this, "", s.optString("point"), s.optString("si")), 10)
             if (!situation) speak(who, prompt)
             if (testMode) testList()
         }
@@ -435,20 +523,14 @@ class SessionActivity : Activity() {
                 if (TalkBar.hasSinhala(said)) progress.add("sinhalaUses")
                 add(youSaidCard(said, mark, r), 12)
                 r.optString("say").takeIf { it.isNotBlank() && !testMode }?.let { speak(who, it) }
-                if (!testMode) add(marksLegend(who), 12)
-                if (mark == "try_again" && tries < 2 && !diagnostic && !testMode) {
-                    add(text("Try again: tap the mic.", 14f, Ui.muted), 8)
-                    talk.reset()
-                    val keep = onAnswer
-                    stepDrill(s, who, tries + 1)
-                    if (onAnswer == null) onAnswer = keep
-                } else {
-                    talk.reset(); needVoice(false)
-                    val lastStep = index == steps.size - 1
-                    setBottom(nextBlock(if (lastStep) (nextSessionLabel() ?: "Finish") else "Next",
-                        if (sid == "learn" && k == drills.size - 1) "Appears when this stage is done" else null) {
-                        if (lastStep && !testMode) { markSessionDone(); goNextSession() } else next() })
-                }
+                talk.reset(); needVoice(false)
+                val lastStep = index == steps.size - 1
+                if (!testMode && !diagnostic) {
+                    val r2 = Ui.row(this)
+                    r2.addView(Ui.button(this, "Try again", outline = true) { show(index) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    r2.addView(Ui.button(this, "Next") { if (lastStep) endPart() else next() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+                    add(r2, 12)
+                } else setBottom(nextBlock("Next") { if (lastStep && !testMode) endPart() else next() })
             }
         }
     }
@@ -525,17 +607,17 @@ class SessionActivity : Activity() {
         val anytime = s.optBoolean("anytime", false)
         if (item >= items.length()) {
             needVoice(false)
-            add(text("Good reactions: $good of ${items.length()}", 16f, Ui.green, true), 14)
-            setBottom(nextBlock(if (anytime) "Done" else (nextSessionLabel() ?: "Next"), if (anytime) null else "Appears after the last item") { if (anytime) finish() else next() })
+            add(text("✓  Reactions done", 16f, Ui.green, true), 14)
+            setBottom(nextBlock(if (anytime) "Done" else "Next") { if (anytime) finish() else next() })
             return
         }
         val who = if (s.optString("who") == "both") Ui.character("both", item) else who0
         val it = items.getJSONObject(item)
         content.removeAllViews()
         needVoice(true, "Tap the mic to react · tap Sinhala to speak Sinhala")
-        header("Quick reactions", if (anytime) "Item ${item + 1} of ${items.length()} · any time" else "Session 3 · Listen and react", who)
+        header("Quick reactions", if (anytime) "Any time" else "React to the news", who)
         add(Ui.segments(this, items.length(), item, item), 0)
-        add(saysCard(who, it.optString("news"), "${who.name} says", "Take your time · no clock this week"), 12)
+        add(saysCard(who, it.optString("news"), "${who.name} says"), 12)
         if (week == 1) {
             add(Ui.caps(this, "Ways to react"), 16)
             add(text("Week 1 only: from Week 2 the ideas disappear and you find your own.", 12.5f, Ui.muted), 4)
@@ -552,8 +634,7 @@ class SessionActivity : Activity() {
                 add(r, 8)
             }
         }
-        val counter = text("Good reactions so far: $good of $item", 13.5f, Ui.muted).apply { gravity = Gravity.CENTER }
-        add(counter, 12)
+
         speak(who, it.optString("news"))
         onAnswer = { said ->
             talk.enabled = false
@@ -574,7 +655,7 @@ class SessionActivity : Activity() {
     private fun stepListen(s: JSONObject, who: Character) {
         val script = s.optString("script")
         val qs = s.optJSONArray("questions") ?: JSONArray()
-        header("Listening", "Session 3 · Listen and react", who)
+        header(if (testMode) "Weekly test" else "Listening", if (testMode) "Part E · listening" else s.optString("title"), who)
         needVoice(true)
         val card = Ui.card(this)
         card.addView(Ui.caps(this, "Listen"))
@@ -596,18 +677,18 @@ class SessionActivity : Activity() {
         col.addView(prow, Ui.lp(this, 4))
         r.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(r, Ui.lp(this, 10))
-        card.addView(text("Natural speech, a little at a time. Answer the questions out loud.", 13f, Ui.muted), Ui.lp(this, 8))
+        card.addView(text("Tap ▶ to hear it again, any time.", 13.5f, Ui.muted), Ui.lp(this, 8))
         add(card, 12)
         var plays = 0
         voice.onSpeaking = { t ->
             if (t) { var p = 0; val tick = object : Runnable { override fun run() { if (p < 100) { p += 100 / secs; bar.progress = p; main.postDelayed(this, 1000) } } }; main.post(tick) }
-            else { bar.progress = 100; plays++; played.text = if (plays == 1) "Played once" else "Played $plays times"; onPlayed?.invoke() }
+            else { bar.progress = 100; plays++; played.text = "Played"; onPlayed?.invoke() }
         }
-        add(Ui.caps(this, "${qs.length()} questions · answer out loud"), 16)
+        add(Ui.caps(this, "Your tasks · answer out loud"), 16)
         val list = Ui.card(this).apply { setPadding(0, dp(4), 0, dp(4)) }
         val rows = (0 until qs.length()).map { k ->
             val row = Ui.row(this).apply { setPadding(dp(14), dp(10), dp(14), dp(10)) }
-            val num = text("${k + 1}", 14f, Ui.muted, true).apply { gravity = Gravity.CENTER; background = Ui.rounded(this@SessionActivity, Ui.surface2, 14) }
+            val num = text("○", 14f, Ui.muted, true).apply { gravity = Gravity.CENTER; background = Ui.rounded(this@SessionActivity, Ui.surface2, 14) }
             row.addView(num, LinearLayout.LayoutParams(dp(28), dp(28)))
             row.addView(text(qs.getString(k), 15f, Ui.ink).apply { setPadding(dp(12), 0, 0, 0) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             list.addView(row); row to num
@@ -619,11 +700,12 @@ class SessionActivity : Activity() {
                 row.setBackgroundColor(if (j == k) Ui.tealRow else Color.TRANSPARENT)
                 num.background = Ui.rounded(this, if (j == k) Ui.teal else if (j < k) Ui.greenLight else Ui.surface2, 14)
                 num.setTextColor(if (j == k) Color.WHITE else if (j < k) Ui.green else Ui.muted)
-                num.text = if (j < k) "✓" else "${j + 1}"
+                num.text = if (j < k) "✓" else if (j == k) "●" else "○"
             }
             if (k >= qs.length()) {
                 needVoice(false)
-                setBottom(nextBlock(steps.getOrNull(index + 1)?.let { if (it.optString("type") == "react") "Next: quick reactions" else "Next" } ?: (nextSessionLabel() ?: "Next"), "Appears after question ${qs.length()}"))
+                setBottom(nextBlock(steps.getOrNull(index + 1)?.let { if (it.optString("type") == "react") "Next: quick reactions" else "Next" } ?: "Next") {
+                    if (index == steps.size - 1 && !testMode) endPart() else next() })
                 return
             }
             val q = qs.getString(k)
@@ -633,6 +715,7 @@ class SessionActivity : Activity() {
                     talk.enabled = true; talk.reset()
                     val m = r.optString("mark", "good")
                     logAnswer("listen", q, said, m)
+                    if (testMode) testLog.put(JSONObject().put("part", "E. Listening").put("prompt", q).put("answer", TalkBar.forAi(said)))
                     if (m == "good") progress.add("listenGood")
                     add(youSaidCard(said, m, r), 12)
                     (r.optString("partner_reply").ifBlank { r.optString("say") }).takeIf { it.isNotBlank() }?.let { speak(who, it) }
@@ -649,7 +732,7 @@ class SessionActivity : Activity() {
 
     private fun stepBeforeYouTalk(s: JSONObject, who: Character) {
         needVoice(false)
-        header("Before you talk", "Session 2 · conversation", who)
+        header(if (testMode) "Weekly test" else "Before you talk", if (testMode) "Part D · conversation" else session?.optString("title") ?: "", who)
         val card = Ui.card(this)
         val hr = Ui.row(this)
         hr.addView(text("📍", 16f).apply { gravity = Gravity.CENTER; background = Ui.rounded(this@SessionActivity, Ui.tealLight, 10) }, LinearLayout.LayoutParams(dp(34), dp(34)))
@@ -668,8 +751,8 @@ class SessionActivity : Activity() {
         card.addView(text("You don't know what ${if (who.male) "he" else "she"}'ll say. That's the point.", 14f, Ui.muted), Ui.lp(this, 8))
         add(card, 12)
         add(Ui.tip(this, s.optString("tipStart").ifBlank { "Stuck at the start? Notice something → say it → ask." }), 12)
-        val mode = when (s.optString("mode")) { "phone" -> "Phone call"; "video" -> "Video call"; else -> "Face to face" }
-        setBottom(nextBlock("Start talking", "$mode · about ${if (progress.shortDay()) 10 else 20} minutes") { startChat(s, who) })
+        val mode = when (s.optString("mode")) { "phone" -> "Phone call: no face, no words on screen"; "video" -> "${who.name} will video-call you"; else -> "Face to face" }
+        setBottom(nextBlock(if (s.optString("mode") == "video") "Ready for the call" else "Start talking", mode) { startChat(s, who) })
     }
 
     private fun startChat(s: JSONObject, who: Character) {
@@ -677,85 +760,142 @@ class SessionActivity : Activity() {
         voice.stop()
         startActivityForResult(Intent(this, MainActivity::class.java)
             .putExtra("scene", s.put("title", s.optString("title").ifBlank { s.optString("where").substringBefore(":").substringBefore(",") }).toString())
-            .putExtra("partner", who.name).putExtra("day", dayNo)
+            .putExtra("partner", who.name).putExtra("day", dayNo).putExtra("week", week)
             .putExtra("where", "Week $week, day $dayNo, $sid"), 7)
-        if (s.optString("type") == "freechat") { needVoice(false); header("Free chat", sessionSub(), who); setBottom(nextBlock("Open the free chat") { startChat(s, who) }) }
+        if (s.optString("type") == "freechat") { needVoice(false); header("Free chat", session?.optString("title") ?: "", who); setBottom(nextBlock("Open the free chat") { startChat(s, who) }) }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != 7) return
         val s = pendingChat ?: return
+        if (resultCode == RESULT_CANCELED) { show(index); return }   // "Not now" on the ringing screen
         val transcript = data?.getStringExtra("transcript") ?: "[]"
         val turns = data?.getIntExtra("turns", 0) ?: 0
-        val free = s.optString("type") == "freechat"
-        if (turns > 0) progress.add("conversations")
-        if (free) { next(); return }   // the drawing: Free chat → today's review recording
-        content.removeAllViews()
         val who = Ui.character(s.optString("who", "sam"), index)
-        header("Conversation done", "${sessionSub().substringBefore(" ·")} · with ${who.name}", who)
+        if (turns > 0) progress.add("conversations")
+        content.removeAllViews()
+        header(s.optString("title").ifBlank { session?.optString("title") ?: "Conversation" }, "Saved", who)
         needVoice(false)
         if (turns == 0) { add(text("You didn't say anything this time. Try again?", 16f), 12); setBottom(nextBlock("Back to the situation") { show(index) }); return }
-        val wait = text("Looking at your conversation…", 14f, Ui.muted); add(wait, 12)
-        judge(CHAT_RESULT, "Scene: ${s.optString("en")}\nHis goal: ${s.optString("goal")}\nScored: ${s.optBoolean("scored", true)}\n" +
-                "Conversation (he = student):\n$transcript") { r ->
-            content.removeView(wait)
-            if (testMode) testLog.put(JSONObject().put("part", "E. Full conversation").put("transcript", transcript))
-            progress.log("results", JSONObject().put("where", "w${week}d$dayNo").put("score", r.optInt("score", -1)).put("turns", turns)
-                .put("questions", r.optInt("questions")).put("followups", r.optInt("followups")).put("longest", r.optInt("longest_turn_words"))
-                .put("stuck", r.optInt("stuck_recovered")).put("help", r.optInt("asked_help")).put("startedSelf", s.optString("opener").isBlank())
-                .put("communication", r.optJSONArray("communication")?.optJSONObject(0)?.optString("en") ?: ""))
-            resultScreen(r, turns, who)
+        val wait = text("Writing what happened…", 14f, Ui.muted); add(wait, 12)
+        val mode = if (s.optString("type") == "freechat") "free" else s.optString("mode", "face")
+        val title = s.optString("title").ifBlank { session?.optString("title") ?: "Conversation" }
+        thread {
+            val r = Memory.summarize(this, progress, who.name, title, mode, s, org.json.JSONArray(transcript), week, dayNo)
+            main.post {
+                if (isFinishing) return@post
+                content.removeView(wait)
+                if (testMode) testLog.put(JSONObject().put("part", "D. Full conversation").put("transcript", transcript))
+                progress.log("results", JSONObject().put("where", "w${week}d$dayNo").put("score", r.optInt("score", -1)).put("turns", turns)
+                    .put("questions", r.optInt("questions")).put("followups", r.optInt("followups")).put("longest", r.optInt("longest_turn_words"))
+                    .put("stuck", r.optInt("stuck_recovered")).put("help", r.optInt("asked_help")).put("startedSelf", s.optString("opener").isBlank())
+                    .put("communication", r.optString("next_time")))
+                summaryScreen(r, transcript)
+            }
         }
     }
 
-    /** The drawing's result screen: no score (mentor 11 Nov), six number tiles, two things to work on. */
-    private fun resultScreen(r: JSONObject, turns: Int, who: Character) {
-        val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = Ui.rounded(this@SessionActivity, Ui.tealDark, 16); setPadding(dp(16), dp(14), dp(16), dp(14)) }
-        top.addView(text(r.optString("headline").ifBlank { "Nice work!" }, 18f, Ui.ink, true))
-        top.addView(text("$turns turns · ${who.name} enjoyed talking to you", 13.5f, Ui.tealText), Ui.lp(this, 4))
-        add(top, 12)
-        val tiles = listOf(r.optInt("questions").toString() to "questions you asked", r.optInt("followups").toString() to "follow-up questions",
-            "${r.optInt("longest_turn_words")} words" to "longest connected turn", r.optInt("stuck_recovered").toString() to "times you got stuck and kept going",
-            r.optInt("asked_help").toString() to "time(s) you asked for help (good)", r.optInt("sinhala_uses").toString() to "Sinhala: ${r.optString("sinhala_note").ifBlank { "words you needed" }}")
-        for (row in 0..2) {
-            val rr = Ui.row(this)
-            for (c in 0..1) {
-                val (n, l) = tiles[row * 2 + c]
-                val t = Ui.card(this).apply { setPadding(dp(14), dp(10), dp(14), dp(10)) }
-                t.addView(text(n, 20f, if (row * 2 + c == 5) Ui.ink else Ui.teal, true)); t.addView(text(l, 12.5f, Ui.muted))
-                rr.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { if (c == 1) marginStart = dp(8) })
-            }
-            add(rr, 8)
+    /** The conversation summary (extras C): what happened in 8–10 lines, well done, Better English, Read the chat · Next. No score. */
+    private fun summaryScreen(r: JSONObject, transcript: String) {
+        val what = Ui.edgeCard(this)
+        what.addView(Ui.caps(this, "What happened"))
+        what.addView(text(r.optString("summary").ifBlank { "Your conversation is saved." }, 15f), Ui.lp(this, 6))
+        add(what, 10)
+        val well = r.optJSONArray("well_done") ?: JSONArray()
+        if (well.length() > 0) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "Well done"))
+            for (k in 0 until well.length()) c.addView(text(android.text.SpannableStringBuilder("✓  ").apply {
+                setSpan(android.text.style.ForegroundColorSpan(Ui.green), 0, 1, 0); append(well.getString(k)) }, 15f), Ui.lp(this, 4))
+            add(c, 10)
         }
-        val comm = r.optJSONArray("communication")?.optJSONObject(0)
-        val gram = r.optJSONArray("grammar")?.optJSONObject(0)
-        if (comm != null || gram != null) {
-            val hr = Ui.row(this)
-            hr.addView(Ui.caps(this, "${listOfNotNull(comm, gram).size} things to work on"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val card = Ui.card(this)
-            val cText = text(comm?.optString("en") ?: "", 14f, Ui.ink); val gText = text(gram?.optString("en") ?: "", 14f, Ui.ink)
-            hr.addView(Ui.enSiSwitch(this) { si ->
-                cText.text = if (si) comm?.optString("si")?.ifBlank { comm.optString("en") } ?: "" else comm?.optString("en") ?: ""
-                gText.text = if (si) gram?.optString("si")?.ifBlank { gram.optString("en") } ?: "" else gram?.optString("en") ?: ""
-            })
-            add(hr, 18)
-            if (comm != null) { card.addView(Ui.chip(this, "Communication", Ui.orangeDark, Ui.orangeLight), Ui.lp(this, 0, false)); card.addView(cText, Ui.lp(this, 4)) }
-            if (gram != null) { card.addView(Ui.chip(this, "Small grammar slip", Ui.muted, Ui.surface2), Ui.lp(this, if (comm != null) 12 else 0, false)); card.addView(gText, Ui.lp(this, 4)) }
-            add(card, 6)
-            gram?.optString("sentence")?.takeIf { it.isNotBlank() }?.let { sent ->
-                progress.log("sayThemAgain", JSONObject().put("si", "").put("en", sent).put("sentence", sent))
-                add(text("The better sentence goes to Say them again.", 12.5f, Ui.muted), 8)
+        val better = r.optJSONArray("better") ?: JSONArray()
+        if (better.length() > 0) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "Better English"))
+            for (k in 0 until better.length()) {
+                val b = better.optJSONObject(k) ?: continue
+                val right = b.optString("right"); val changed = b.optString("changed")
+                val sb = android.text.SpannableStringBuilder(right)
+                val i = if (changed.isNotBlank()) right.indexOf(changed, ignoreCase = true) else -1
+                if (i >= 0) { sb.setSpan(android.text.style.ForegroundColorSpan(Ui.green), i, i + changed.length, 0); sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), i, i + changed.length, 0) }
+                c.addView(text(sb, 15f), Ui.lp(this, 4))
+                progress.log("sayThemAgain", JSONObject().put("si", "").put("en", right).put("sentence", right))
             }
+            c.addView(text("Added to My words", 13.5f, Ui.teal, true), Ui.lp(this, 6))
+            add(c, 10)
         }
-        val last = index == steps.size - 1
+        r.optString("next_time").takeIf { it.isNotBlank() }?.let { add(Ui.tip(this, it), 10) }
+        val row = Ui.row(this)
+        row.addView(Ui.button(this, "Read the chat", outline = true) { readChat(transcript) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Ui.button(this, "Next") { if (index == steps.size - 1 && !testMode) endPart() else next() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+        add(row, 14)
+    }
+
+    private fun readChat(transcript: String) {
+        val t = runCatching { JSONArray(transcript) }.getOrDefault(JSONArray())
+        val me = Ui.name(this).takeIf { it != "me" }?.replaceFirstChar { it.uppercase() } ?: "You"
+        val body = (0 until t.length()).joinToString("\n\n") { val o = t.getJSONObject(it); "${if (o.optString("who") == "he") me else o.optString("who")}: ${o.optString("text").replace(Regex("\\[[a-z]+\\]\\s*"), "")}" }
+        android.app.AlertDialog.Builder(this).setTitle("The chat").setMessage(body.ifBlank { "Nothing was said." }).setPositiveButton("OK", null).show()
+    }
+
+    // ---- end of a part: evaluation + the "part done" screen (extras B) ----
+
+    private fun endPart() { voice.stop(); show(steps.size) }
+
+    /** After every part: an evaluation of his answers goes into his profile (finding 7, 11). */
+    private fun evaluatePart() {
+        if (sid !in setOf("shadow", "phrases", "listen", "review", "about", "voice", "start")) return
+        val answers = progress.list("answers").filter { it.optLong("at") >= partStart }
+        if (answers.isEmpty()) return
+        val user = "Today's theme: ${day?.optString("title")}\nToday's phrases: ${day?.optJSONArray("phrases")}\nPart: ${session?.optString("title")}\n" +
+            "His answers:\n" + answers.joinToString("\n") { "- to \"${it.optString("prompt")}\": ${it.optString("said")} (${it.optString("mark")})" }
+        val ctx = applicationContext; val p = progress; val w = week; val d = dayNo; val src = session?.optString("title") ?: sid
+        thread { runCatching { Memory.applyEvaluation(p, Ai.ask(ctx, PART_EVAL, user), src, w, d) } }
+    }
+
+    private fun partDone(line: String?) {
+        needVoice(false)
+        content.removeAllViews()
+        header(session?.optString("title") ?: "", "Done", null)
+        val parts = day?.let { progress.sessionsFor(it) } ?: emptyList()
+        val doneN = parts.count { progress.isDone(week, dayNo, it.optString("id")) }
+        val ring = Ui.ring(this, if (parts.isEmpty()) 1f else doneN.toFloat() / parts.size)
+        add(ring.also { it.layoutParams = LinearLayout.LayoutParams(dp(96), dp(96)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(36) } }.let { v ->
+            LinearLayout(this).apply { gravity = Gravity.CENTER; addView(v, LinearLayout.LayoutParams(dp(96), dp(96))) } }, 30)
+        val next = nextSession()
+        add(text(if (next == null) "Today is done ✓" else "${session?.optString("title")} done ✓", 22f, Ui.ink, true).apply { gravity = Gravity.CENTER }, 18)
+        add(text(line ?: doneLine(), 15f).apply { gravity = Gravity.CENTER }, 8)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        if (last) {
-            markSessionDone()
-            box.addView(Ui.button(this, nextSessionLabel() ?: "Back to Home") { goNextSession() })
-            box.addView(Ui.button(this, "Back to Home", outline = true) { finish() }, Ui.lp(this, 10))
-        } else box.addView(Ui.button(this, "Next") { next() })
+        if (next != null) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "Next"))
+            c.addView(text(next.optString("title"), 17f, Ui.ink, true), Ui.lp(this, 2))
+            next.optJSONArray("what")?.optJSONObject(0)?.let { c.addView(text(it.optString("desc").replaceFirstChar { ch -> ch.uppercase() }, 14f, Ui.muted)) }
+            add(c, 22)
+            box.addView(Ui.button(this, "Next") { goNextSession() })
+            box.addView(Ui.link(this, "Done for now · back to Home") { finish() }.apply { gravity = Gravity.CENTER }, Ui.lp(this, 2))
+        } else {
+            Lessons.allDays().firstOrNull { (w, d) -> w > week || (w == week && d.optInt("day") > dayNo) }?.let { (_, d) ->
+                val c = Ui.card(this)
+                c.addView(Ui.caps(this, "Tomorrow"))
+                c.addView(text(d.optString("title"), 17f, Ui.ink, true), Ui.lp(this, 2))
+                add(c, 22)
+            }
+            box.addView(Ui.button(this, "Back to Home") { finish() })
+        }
         setBottom(box)
+    }
+
+    private fun doneLine(): String = when (sid) {
+        "shadow" -> "Your English rhythm gets a little more natural every day."
+        "phrases" -> "Today's phrases are yours now. Use them in the talk and the conversation."
+        "talk321" -> "Each round came out smoother. That's how fast speaking grows."
+        "talk" -> "Your conversation is saved. Sam and Maya will remember it."
+        "listen" -> "You listened at natural speed and told it back. Well done."
+        "review" -> "Everything from today is saved for tomorrow."
+        else -> "Well done."
     }
 
     // ---- daily review recording (his voice is kept; QA 11 Nov) ----
@@ -766,7 +906,7 @@ class SessionActivity : Activity() {
     private fun stepRecord(s: JSONObject, who: Character) {
         needVoice(false)
         val topic = s.optString("topic")
-        if (dayNo == 0) day0Header() else header("Daily review recording", "2 minutes · end of the day", null)
+        if (dayNo == 0) day0Header() else header("Recording", sessionSub(), null)
         val prevAll = VoiceRecorder.all(progress)
         val prev = prevAll.lastOrNull { it.optString("topic") == topic } ?: prevAll.lastOrNull()
         val card = Ui.card(this)
@@ -884,11 +1024,232 @@ class SessionActivity : Activity() {
                     add(done, 12)
                     val last = index == steps.size - 1
                     val lastOfDay = last && day?.let { d -> progress.sessionsFor(d).lastOrNull()?.optString("id") == sid } == true
-                    setBottom(if (last) nextBlock(if (lastOfDay) "Finish and go Home" else (nextSessionLabel() ?: "Finish")) { markSessionDone(); if (lastOfDay) finish() else goNextSession() } else nextBlock("Next"))
+                    setBottom(if (last) nextBlock("Next") { endPart() } else nextBlock("Next"))
                 }
             }
         }
         if (dayNo == 0) day0Footer()
+    }
+
+    // ---- Shadowing (new step): voice only; "Again, please" plays slower; the line shows for 3 s only after a 2nd miss ----
+
+    private fun stepShadow(s: JSONObject, who: Character, k: Int, last: Pair<Boolean, Boolean>? = null) {
+        val lines = s.optJSONArray("lines") ?: JSONArray()
+        if (k >= lines.length()) { if (index == steps.size - 1) endPart() else next(); return }
+        content.removeAllViews()
+        if (dayNo == 0) day0Header() else header("Shadowing", "Listen and echo", who)
+        add(Ui.segments(this, lines.length(), k, k), 4)
+        val line = nameIn(lines.getString(k))
+        val card = Ui.card(this)
+        card.addView(Ui.caps(this, "${who.name} says · repeat right after ${if (who.male) "him" else "her"}"))
+        val r = Ui.row(this)
+        r.addView(IconButton(this, Glyph.PLAY, Ui.teal, Color.WHITE).apply { setOnClickListener { Ui.tap(it); replay() } }, LinearLayout.LayoutParams(dp(52), dp(52)))
+        r.addView(SoundBarsView(this).apply { color = Ui.bars; still(line.hashCode()) }, LinearLayout.LayoutParams(dp(130), dp(30)).apply { marginStart = dp(12) })
+        card.addView(r, Ui.lp(this, 10))
+        card.addView(text("Voice only. Missed it? Say \"Again, please\": it plays slower.", 14f, Ui.muted), Ui.lp(this, 10))
+        add(card, 12)
+        val flash = Ui.card(this, Ui.orangeLine).apply { visibility = View.GONE }
+        flash.addView(Ui.caps(this, "Shown for 3 seconds", Ui.orangeDark))
+        flash.addView(text("“$line”", 16f), Ui.lp(this, 4))
+        add(flash, 10)
+        if (last != null) {
+            val c = Ui.card(this)
+            c.addView(Ui.caps(this, "Last line"))
+            val cr = Ui.row(this)
+            cr.addView(Ui.chip(this, (if (last.first) "✓ " else "") + "All words", if (last.first) Ui.green else Ui.muted, if (last.first) Ui.greenLight else Ui.surface2, 13.5f))
+            cr.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
+            cr.addView(Ui.chip(this, (if (last.second) "✓ " else "") + "Kept up", if (last.second) Ui.green else Ui.muted, if (last.second) Ui.greenLight else Ui.surface2, 13.5f))
+            c.addView(cr, Ui.lp(this, 6))
+            add(c, 10)
+        }
+        add(Ui.tip(this, "Start a moment after ${if (who.male) "him" else "her"}, like an echo."), 10)
+        needVoice(true, "Tap the mic and repeat")
+        onPlayed = { lineEndAt = SystemClock.elapsedRealtime() }
+        speak(who, line)
+        var miss = 0
+        onAnswer = { said ->
+            talk.reset()
+            val score = overlap(TalkBar.plain(said), line)
+            val keptUp = lineEndAt > 0 && micAt - lineEndAt in -3000..2500
+            progress.log("answers", JSONObject().put("kind", "shadow").put("prompt", line).put("said", TalkBar.forAi(said))
+                .put("mark", if (score >= 0.7f) "good" else "try_again").put("where", "w${week}d$dayNo"))
+            if (score >= 0.7f || miss >= 2) { progress.add("shadowLines"); stepShadow(s, who, k + 1, (score >= 0.85f) to keptUp) }
+            else {
+                miss++
+                add(text(if (miss == 1) "Nearly! Listen once more." else "Good try. Once more.", 14.5f, Ui.muted), 8)
+                if (miss >= 2) { flash.visibility = View.VISIBLE; main.postDelayed({ flash.visibility = View.GONE }, 3000) }
+                replays = 1; replay()
+            }
+        }
+    }
+
+    // ---- 3-2-1 talk (new step): the same topic in 3, then 2, then 1 minute; round 1 vs the last round ----
+
+    private val rounds = mutableListOf<JSONObject>()
+
+    private fun stepTalk321(s: JSONObject, round: Int) {
+        needVoice(false)
+        content.removeAllViews()
+        val limits = listOf(180, 120, 60)
+        if (dayNo == 0) day0Header() else header(session?.optString("title")?.takeIf { it != "3-2-1 talk" } ?: "3-2-1 talk", "Same topic, less time", null)
+        val topic = s.optString("topic")
+        val tc = Ui.card(this)
+        tc.addView(Ui.caps(this, "Topic"))
+        tc.addView(text(topic, 19f, Ui.ink, true), Ui.lp(this, 4))
+        s.optJSONArray("points")?.let { pts -> val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            var row = Ui.row(this); var used = 0
+            for (k in 0 until pts.length()) { val t = pts.getString(k)
+                if (used > 0 && used + t.length > 30) { box.addView(row, Ui.lp(this, 6)); row = Ui.row(this); used = 0 }
+                row.addView(Ui.chip(this, t, Ui.ink, Ui.surface2, 13.5f), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }); used += t.length + 3 }
+            box.addView(row, Ui.lp(this, 6)); tc.addView(box, Ui.lp(this, 4)) }
+        add(tc, 8)
+        val tiles = Ui.row(this)
+        for (k in 0..2) {
+            val t = Ui.card(this, if (k == round) Ui.teal else Ui.line).apply { setPadding(dp(12), dp(10), dp(12), dp(10)) }
+            t.addView(text("Round ${k + 1}", 13.5f, Ui.muted))
+            t.addView(text("%d:00".format(limits[k] / 60) + if (k < round) " ✓" else "", 16f, if (k < round) Ui.green else if (k == round) Ui.ink else Ui.muted, true))
+            tiles.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (k > 0) marginStart = dp(8) })
+        }
+        add(tiles, 10)
+        if (round >= 3) { talk321Done(s); return }
+        val limit = limits[round]
+        val tcard = Ui.card(this).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val timer = text("0:00", 34f, Ui.ink, true).apply { gravity = Gravity.CENTER }
+        val tr = Ui.row(this).apply { gravity = Gravity.CENTER }
+        tr.addView(timer); tr.addView(text("  / %d:00".format(limit / 60), 15f, Ui.muted))
+        tcard.addView(tr)
+        val bars = SoundBarsView(this).apply { color = Ui.teal }
+        tcard.addView(bars, LinearLayout.LayoutParams(dp(230), dp(34)).apply { topMargin = dp(8); gravity = Gravity.CENTER_HORIZONTAL })
+        add(tcard, 10)
+        if (round > 0) rounds.lastOrNull()?.optString("tip_en")?.takeIf { it.isNotBlank() }?.let { add(Ui.tip(this, it), 10) }
+        else add(Ui.tip(this, "Talk about all the points if you can. Pauses are fine. When the time is up, the round ends by itself."), 10)
+        // recorder bar: pause · ↑ finish the round
+        val barRow = Ui.row(this).apply { background = Ui.rounded(this@SessionActivity, Ui.surface, 36, Ui.line); setPadding(dp(8), dp(8), dp(8), dp(8)); minimumHeight = dp(72) }
+        val status = text("Tap the mic and talk", 13.5f, Ui.teal, true)
+        val micB = IconButton(this, Glyph.MIC, Ui.teal, Color.WHITE)
+        val pauseB = IconButton(this, Glyph.PAUSE, Ui.tealLight, Ui.teal, Ui.teal).apply { visibility = View.GONE }
+        val sendB = IconButton(this, Glyph.SEND, Ui.teal, Color.WHITE).apply { visibility = View.GONE }
+        barRow.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+        barRow.addView(pauseB, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(8) })
+        barRow.addView(micB, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(8) })
+        barRow.addView(sendB, LinearLayout.LayoutParams(dp(50), dp(50)))
+        val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        wrap.addView(barRow)
+        wrap.addView(text("pause · ↑ finish the round · Sinhala is OK if you get stuck", 12f, Ui.muted).apply { gravity = Gravity.CENTER }, Ui.lp(this, 6))
+        setBottom(wrap)
+        var startAt = 0L; var total = 0L; var running = false; var ended = false
+        lateinit var finishRound: () -> Unit
+        val tick = object : Runnable {
+            override fun run() {
+                if (!running) return
+                val ms = total + SystemClock.elapsedRealtime() - startAt
+                timer.text = "%d:%02d".format(ms / 60000, (ms / 1000) % 60)
+                bars.push((recorder?.level() ?: 0f) * 12f - 2f)
+                if (ms >= limit * 1000L) { finishRound(); return }
+                main.postDelayed(this, 80)
+            }
+        }
+        val fname = "talk-${System.currentTimeMillis()}"
+        micB.setOnClickListener {
+            Ui.tap(it)
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { TalkBar.askMic(this); return@setOnClickListener }
+            if (recorder == null) {
+                val rec = VoiceRecorder(this)
+                if (!rec.start(fname)) { Ui.toast(this, "The recorder couldn't start. Try again."); return@setOnClickListener }
+                recorder = rec
+            } else recorder?.resume()
+            startAt = SystemClock.elapsedRealtime(); running = true; main.post(tick)
+            status.text = "Recording…"; micB.visibility = View.GONE; pauseB.visibility = View.VISIBLE; sendB.visibility = View.VISIBLE
+        }
+        pauseB.setOnClickListener {
+            Ui.tap(it); recorder?.pause(); running = false; total += SystemClock.elapsedRealtime() - startAt
+            status.text = "Paused · tap the mic to go on"; pauseB.visibility = View.GONE; micB.visibility = View.VISIBLE
+        }
+        finishRound = {
+            if (!ended) {
+                ended = true
+                if (running) total += SystemClock.elapsedRealtime() - startAt
+                running = false
+                val f = recorder?.stop(); recorder = null
+                setBottom(null)
+                if (f == null || total < 3000) { Ui.toast(this, "That was very short. Try the round again."); stepTalk321(s, round) }
+                else {
+                    val wait = text("Listening to round ${round + 1}…", 14f, Ui.muted); add(wait, 12)
+                    val secs = total / 1000
+                    thread {
+                        val j = runCatching { Ai.askAudio(this, TALK321_COACH, "Topic: $topic\nRound ${round + 1} of 3 (${limit / 60} minute(s)).\nToday's phrases: ${day?.optJSONArray("phrases")}", f) }
+                            .getOrElse { JSONObject() }
+                        main.post {
+                            if (isFinishing) return@post
+                            val words = j.optString("transcript").split(Regex("\\s+")).count { it.isNotBlank() }
+                            j.put("file", f.absolutePath).put("secs", secs).put("words", words)
+                                .put("wpm", if (secs > 0) (words * 60 / secs).toInt() else 0)
+                                .put("pausesPerMin", if (secs > 0) j.optInt("long_pauses") * 60.0 / secs else 0.0)
+                            rounds.add(j)
+                            stepTalk321(s, round + 1)
+                        }
+                    }
+                }
+            }
+        }
+        sendB.setOnClickListener { Ui.tap(it); finishRound() }
+    }
+
+    private fun talk321Done(s: JSONObject) {
+        val first = rounds.firstOrNull(); val lastR = rounds.lastOrNull()
+        if (first == null || lastR == null) { setBottom(nextBlock("Next") { endPart() }); return }
+        val c = Ui.card(this)
+        c.addView(Ui.caps(this, "Round 1 → now"))
+        val faster = lastR.optInt("wpm") > first.optInt("wpm")
+        val fewer = lastR.optDouble("pausesPerMin") < first.optDouble("pausesPerMin") || (first.optInt("long_pauses") > 0 && lastR.optInt("long_pauses") == 0)
+        fun tick(on: Boolean, t: String) = text(android.text.SpannableStringBuilder(if (on) "✓  " else "•  ").apply {
+            setSpan(android.text.style.ForegroundColorSpan(if (on) Ui.green else Ui.muted), 0, 1, 0); append(t) }, 15f)
+        c.addView(tick(faster, if (faster) "Faster than round 1" else "About as fast as round 1"), Ui.lp(this, 6))
+        c.addView(tick(fewer, if (fewer) "Fewer long pauses" else "Pauses: about the same"), Ui.lp(this, 2))
+        lastR.optString("good").takeIf { it.isNotBlank() }?.let { c.addView(text(it, 14.5f, Ui.green), Ui.lp(this, 8)) }
+        val pr = Ui.row(this)
+        pr.addView(Ui.smallButton(this, "▶ Round 1", false) { VoiceRecorder.play(File(first.optString("file"))) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        pr.addView(Ui.smallButton(this, "▶ Last round", false) { VoiceRecorder.play(File(lastR.optString("file"))) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
+        c.addView(pr, Ui.lp(this, 10))
+        add(c, 10)
+        // Saved for Progress, the review and the mentor's report
+        val words = lastR.optString("transcript")
+        progress.log("talks", JSONObject().put("week", week).put("day", dayNo).put("topic", s.optString("topic"))
+            .put("wpm", lastR.optInt("wpm")).put("wpm1", first.optInt("wpm")).put("pausesPerMin", lastR.optDouble("pausesPerMin"))
+            .put("pauses1", first.optDouble("pausesPerMin")).put("words", lastR.optInt("words")).put("file", lastR.optString("file")).put("file1", first.optString("file")))
+        progress.log("recordings", JSONObject().put("topic", s.optString("topic")).put("file", lastR.optString("file")).put("words", words)
+            .put("pauses", lastR.optInt("long_pauses")).put("connectors", 0).put("follow", "").put("secs", lastR.optLong("secs")).put("day", dayNo).put("week", week))
+        if (dayNo == 0 && progress.getString("saveFile:baseline-talk") == null) progress.putString("saveFile:baseline-talk", first.optString("file"))
+        Memory.applyEvaluation(progress, lastR, "3-2-1 talk: ${s.optString("topic")}", week, dayNo)
+        rounds.clear()
+        setBottom(nextBlock("Next") { if (index == steps.size - 1) endPart() else next() })
+    }
+
+    // ---- Review: today's talk next to yesterday's (and Day 0) ----
+
+    private fun stepCompare() {
+        needVoice(false)
+        content.removeAllViews()
+        header("Then and now", sessionSub(), null)
+        val talks = progress.list("talks")
+        val today = talks.lastOrNull { it.optInt("week") == week && it.optInt("day") == dayNo }
+        val before = talks.lastOrNull { !(it.optInt("week") == week && it.optInt("day") == dayNo) }
+        val c = Ui.card(this).apply { setPadding(0, dp(4), 0, dp(4)) }
+        fun row(t: String, sub: String, f: String?) {
+            val r = Ui.row(this).apply { setPadding(dp(14), dp(11), dp(10), dp(11)) }
+            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col.addView(text(t, 15f, Ui.ink, true)); col.addView(text(sub, 13.5f, Ui.muted))
+            r.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val file = f?.let { File(it) }?.takeIf { it.exists() }
+            if (file != null) r.addView(Ui.smallButton(this, "▶ Play", false) { VoiceRecorder.play(file) })
+            c.addView(r)
+        }
+        progress.getString("saveFile:baseline-talk")?.let { if (dayNo > 0) row("Day 0", "Where you started", it) }
+        if (before != null) row(if (before.optInt("day") == dayNo - 1) "Yesterday" else "Last time", "${before.optString("topic")} · ${before.optInt("wpm")} words a minute", before.optString("file"))
+        if (today != null) row("Today", "${today.optString("topic")} · ${today.optInt("wpm")} words a minute", today.optString("file"))
+        if (c.childCount == 0) add(Ui.tip(this, "Do today's 3-2-1 talk, and you'll hear it here next to yesterday's."), 10) else add(c, 10)
+        if (today != null && before != null && today.optInt("wpm") > before.optInt("wpm")) add(text("✓  Faster than last time", 15f, Ui.green, true), 12)
+        setBottom(nextBlock("Next") { if (index == steps.size - 1) endPart() else next() })
     }
 
     // ---- listening speed (Day 0) ----
@@ -931,11 +1292,11 @@ class SessionActivity : Activity() {
         val items = progress.sayAgainItems().take(5)
         content.removeAllViews()
         val who = Ui.character("both", k)
-        header("Say them again", "${items.size} phrases · about ${maxOf(2, items.size * 2)} minutes", who)
+        header("Say them again", if (sid == "sayagain") "Any time" else sessionSub(), who)
         if (items.isEmpty() || k >= items.size) {
             needVoice(false)
             add(text(if (items.isEmpty()) "Nothing to practise yet. Well done!" else "Done for now!", 16f, Ui.green, true), 14)
-            setBottom(nextBlock("Finish") { if (sid == "sayagain") finish() else next() })
+            setBottom(nextBlock(if (sid == "sayagain") "Finish" else "Next") { if (sid == "sayagain") finish() else if (index == steps.size - 1) endPart() else next() })
             return
         }
         val it = items[k]
@@ -948,7 +1309,7 @@ class SessionActivity : Activity() {
         add(labels, 4)
         val card = Ui.card(this)
         val hr = Ui.row(this)
-        hr.addView(Ui.caps(this, "Phrase ${k + 1} of ${items.size}"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        hr.addView(Ui.caps(this, "Phrase"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val times = it.optInt("times", 1)
         if (times > 1) hr.addView(Ui.chip(this, "Came back $times times", Ui.orangeDark, Ui.orangeLight))
         card.addView(hr)
@@ -1003,9 +1364,9 @@ class SessionActivity : Activity() {
     private fun stepTestIntro(s: JSONObject) {
         testMode = true
         needVoice(false)
-        header("Weekly test", "Day $dayNo · ${testParts().size} parts", null)
+        header("Weekly test", "Week $week", null)
         add(Ui.tip(this, "Scored on understanding, asking and keeping it going, not perfect grammar. Asking never loses points."), 12)
-        add(Ui.caps(this, "Weekly test · about 40 minutes"), 18)
+        add(Ui.caps(this, "Weekly test"), 18)
         add(text("Pass: ${s.optInt("pass", 70)} overall, and at least \"OK\" in starting and asking.", 12.5f, Ui.muted), 4)
         testList()
         setBottom(nextBlock("Start the test"))
@@ -1019,7 +1380,7 @@ class SessionActivity : Activity() {
 
     private fun testList() {
         val parts = testParts()
-        val cur = steps.getOrNull(index)?.let { if (it.optString("type") == "drill") partLetter(it) else if (it.optString("type") == "chat") "E" else "" } ?: ""
+        val cur = steps.getOrNull(index)?.let { when (it.optString("type")) { "drill" -> partLetter(it); "chat" -> "D"; "listen" -> "E"; else -> "" } } ?: ""
         val box = Ui.card(this).apply { setPadding(0, dp(4), 0, dp(4)) }
         val done = testLog.length()
         parts.forEach { p ->
@@ -1051,8 +1412,7 @@ class SessionActivity : Activity() {
         val d = day ?: return null
         val list = progress.sessionsFor(d)
         val n = nextSession() ?: return null
-        val num = list.indexOf(n) + 1
-        return "Next: session $num, ${n.optString("title").lowercase()}"
+        return "Next: ${n.optString("title")}"
     }
 
     private fun goNextSession() {
@@ -1067,12 +1427,8 @@ class SessionActivity : Activity() {
         content.removeAllViews()
         markSessionDone()
         if (testMode) { scoreTest(); return }
-        header(session?.optString("title") ?: "Done", "Session done", null)
-        add(text("✓  Session done!", 22f, Ui.green, true), 12)
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        nextSessionLabel()?.let { l -> box.addView(Ui.button(this, l) { goNextSession() }); box.addView(View(this), LinearLayout.LayoutParams(1, dp(10))) }
-        box.addView(Ui.button(this, "Back to Home", outline = true) { finish() })
-        setBottom(box)
+        evaluatePart()
+        partDone(null)
     }
 
     private fun scoreTest() {
@@ -1170,6 +1526,12 @@ class SessionActivity : Activity() {
             "\"goal_met\": true | false, \"communication\": [{\"en\": \"one thing that would make the conversation work better, with what happened\", \"si\": \"same in Sinhala\"}], " +
             "\"grammar\": [{\"en\": \"one small grammar slip and the right way, e.g. 'because of I have' → 'because I have'\", \"si\": \"same in Sinhala\", \"sentence\": \"his sentence said correctly\"}], " +
             "\"score\": 0-100 if Scored is true (for the mentor only; communication first), else omit, \"summary\": \"one encouraging sentence\"}."
+
+        const val PART_EVAL = BASE + "Look at his answers in this part and fill his learner profile. JSON: {" + Memory.EVAL_FIELDS + "}."
+
+        const val TALK321_COACH = BASE + "The audio is one round of his timed talk on a topic (no score). Listen to it. JSON: {\"transcript\": \"what he said, word for word\", " +
+            "\"long_pauses\": number of pauses longer than about 3 seconds, \"good\": \"one thing he did well, one short sentence\", " +
+            "\"tip_en\": \"one thing to try in the next round\", \"tip_si\": \"same in Sinhala\", " + Memory.EVAL_FIELDS + "}."
 
         const val TEST_SCORE = BASE + "Score his weekly test on communication. Areas and maximum points: Fluency 25, Connecting 20, Keeping it going (bounce-backs, follow-ups, reactions, asking when lost) 20, " +
             "Starting and closing 10, Being understood 15, Grammar (main errors only) 5, Confidence 5. Asking for help is never a minus. Be fair, not strict. " +

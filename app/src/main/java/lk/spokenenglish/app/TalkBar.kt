@@ -86,6 +86,15 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
 
     val isTalking get() = inTurn
 
+    /** Video calls (1.1 finding 13): no mic tap; the turn is sent by itself after this much silence (0 = off). */
+    var autoSendMs = 0L
+
+    /** Starts listening without a tap (video calls). */
+    fun listen() { if (!recording && !finishing) micTap() }
+
+    /** The සිං hold button in video calls: down = Sinhala, up = back to English. */
+    fun holdSinhala(on: Boolean) = switchTo(on)
+
     init {
         val c = a
         view = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(Ui.dp(c, 12), Ui.dp(c, 4), Ui.dp(c, 12), Ui.dp(c, 10)) }
@@ -288,11 +297,13 @@ class TalkBar(private val a: Activity, private val onSend: (List<Pair<String, Bo
     private val silenceCheck = object : Runnable {
         override fun run() {
             if (!recording || finishing || readyPending) return
-            if (!recordNudge && SystemClock.elapsedRealtime() - lastVoiceAt >= 6000) {
+            val quiet = SystemClock.elapsedRealtime() - lastVoiceAt
+            if (autoSendMs > 0 && !sinhala && quiet >= autoSendMs && (segments.isNotEmpty() || partial.isNotBlank())) { send(); return }
+            if (autoSendMs == 0L && !recordNudge && quiet >= 6000) {
                 recordNudge = true
                 showNudge("Take your time. Keep going, or tap සිං and say it in Sinhala.")
             }
-            main.postDelayed(this, 1000)
+            main.postDelayed(this, if (autoSendMs > 0) 400 else 1000)
         }
     }
 

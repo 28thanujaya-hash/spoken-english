@@ -53,6 +53,7 @@ class HomeActivity : Activity() {
         body.addView(Ui.label(this, "Getting today's lessons…", 16f, Ui.muted))
         thread {
             val ok = Lessons.load(this)
+            if (ok) progress.freshStartIfNeeded(Lessons.version)
             main.post {
                 loaded = ok
                 if (!ok) {
@@ -128,216 +129,193 @@ class HomeActivity : Activity() {
         return r
     }
 
-    private fun minutesFor(id: String): Int {
-        val short = progress.shortDay()
-        return when (id) { "learn" -> if (short) 15 else 30; "talk" -> if (short) 20 else 30; "free" -> if (short) 10 else 30; else -> 30 }
+    private fun anyTime(week: Int, dayN: Int, title: String = "Any time") {
+        add(Ui.caps(this, title), 20)
+        add(listCard(listOf(
+            listRow("“”", Ui.ink, Ui.surface2, "Free chat", null, true) { startActivity(Intent(this, MainActivity::class.java)) },
+            listRow("↻", Ui.ink, Ui.surface2, "Say them again", null, true) { SessionActivity.start(this, week, dayN, "sayagain") },
+            listRow("!", Ui.ink, Ui.surface2, "Quick reactions", null, true) { SessionActivity.start(this, week, dayN, "reactions") }
+        )), 6)
     }
 
-    // ---------------------------------------------------------------- Home (the drawing minus the plan)
+    /** Blue phrase chips that wrap. */
+    private fun chips(items: org.json.JSONArray?): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (items == null) return box
+        var row = Ui.row(this); var used = 0
+        for (k in 0 until items.length()) {
+            val t = items.getString(k)
+            if (used > 0 && used + t.length > 34) { box.addView(row, Ui.lp(this, 6)); row = Ui.row(this); used = 0 }
+            row.addView(Ui.chip(this, t, Ui.blue, Ui.blueLight, 13.5f), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+            used += t.length + 3
+        }
+        box.addView(row, Ui.lp(this, 6))
+        return box
+    }
+
+    // ---------------------------------------------------------------- Home (QA 12 Nov: a day overview, no session names, numbers or minutes)
 
     private fun home() {
         val cur = progress.currentDay() ?: return
         val (week, d) = cur
+        val dayN = d.optInt("day")
+        thread { Memory.makePlanIfNeeded(applicationContext, progress, week, d) }
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val hello = when { hour < 12 -> "Good morning"; hour < 17 -> "Good afternoon"; else -> "Good evening" }
-        add(t("$hello, ${hisName() ?: "there"}", 22f, Ui.ink, true), 0)
+        val sessions = progress.sessionsFor(d)
+        val next = sessions.firstOrNull { !progress.isDone(week, dayN, it.optString("id")) }
+        val doneN = sessions.count { progress.isDone(week, dayN, it.optString("id")) }
+        val allDone = next == null
+        add(t(if (allDone) "Well done${hisName()?.let { ", $it" } ?: "!"}" else "$hello${hisName()?.let { ", $it" } ?: "!"}", 22f, Ui.ink, true), 0)
         if (Lessons.version > progress.seenLessons()) {
             if (progress.seenLessons() > 0) add(Ui.chip(this, "✓  New lessons are ready", Ui.green, Ui.greenLight, 13.5f), 8)
             progress.setSeenLessons(Lessons.version)
         }
-        val sessions = progress.sessionsFor(d)
-        val dayN = d.optInt("day")
-        val next = sessions.firstOrNull { !progress.isDone(week, dayN, it.optString("id")) }
-
-        // Continue card
-        val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = Ui.rounded(this@HomeActivity, Ui.tealDark, 18); setPadding(dp(16), dp(14), dp(16), dp(14)) }
-        if (next != null) {
-            val n = sessions.indexOf(next) + 1
-            hero.addView(Ui.caps(this, "Continue · session $n of ${sessions.size}", Ui.tealText))
-            hero.addView(t(continueTitle(d, next), 19f, Ui.ink, true), Ui.lp(this, 6))
-            val r = Ui.row(this)
-            r.addView(t(stageLine(week, dayN, next), 13.5f, Ui.tealText), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            r.addView(t("Continue", 15f, Ui.teal, true).apply {
-                gravity = Gravity.CENTER; setPadding(dp(16), dp(9), dp(16), dp(9))
-                background = Ui.ripple(this@HomeActivity, Ui.rounded(this@HomeActivity, Ui.cream, 12), 12)
-                setOnClickListener { Ui.tap(it); SessionActivity.start(this@HomeActivity, week, dayN, next.optString("id")) }
-            })
-            hero.addView(r, Ui.lp(this, 10))
-        } else {
-            hero.addView(Ui.caps(this, "Today", Ui.tealText))
-            hero.addView(t("✓  All done for today", 19f, Ui.ink, true), Ui.lp(this, 6))
-            hero.addView(t("See you tomorrow. Free chat or Say them again are here any time.", 13.5f, Ui.tealText), Ui.lp(this, 6))
-        }
-        add(hero, 14)
-
-        // Today: minutes practised
-        val goal = if (progress.shortDay()) 45 else 120
-        val mins = progress.minutesToday()
-        val today = Ui.card(this)
-        val tr = Ui.row(this)
-        tr.addView(t("Today: $mins of $goal min practised", 15.5f, Ui.ink, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        tr.addView(t("goal", 12.5f, Ui.muted))
-        today.addView(tr)
-        today.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = goal; progress = minOf(goal, mins)
-            progressTintList = android.content.res.ColorStateList.valueOf(Ui.teal)
-            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Ui.line)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(8) })
-        betterThanYesterday()?.let { today.addView(t("✓  $it", 13.5f, Ui.green), Ui.lp(this, 8)) }
-        val shortBtn = t(if (progress.shortDay()) "45-minute day is on · back to the full day" else "Short on time? Do a 45-minute day", 13.5f, Ui.ink, true).apply {
-            setPadding(dp(12), dp(9), dp(12), dp(9))
-            background = Ui.ripple(this@HomeActivity, Ui.rounded(this@HomeActivity, Ui.surface, 12, Ui.line), 12)
-            setOnClickListener { Ui.tap(it); progress.setShortDay(!progress.shortDay()); render() }
-        }
-        today.addView(shortBtn, Ui.lp(this, 10, false))
-        add(today, 12)
-
-        // Today's sessions
-        add(Ui.caps(this, "Today's ${sessions.size} sessions"), 20)
-        add(listCard(sessions.mapIndexed { i, s ->
-            val id = s.optString("id")
-            val done = progress.isDone(week, dayN, id)
-            val isNext = s == next
-            val effort = when (s.optString("effort")) { "hard" -> "Hard"; "medium" -> "Medium"; "relaxed" -> "Relaxed"; else -> "Easy" }
-            listRow(if (done) "✓" else "${i + 1}", if (done) Ui.green else if (isNext) Color.WHITE else Ui.teal,
-                if (done) Ui.greenLight else if (isNext) Ui.teal else Ui.tealLight,
-                if (id == "free") "Free chat + review recording" else s.optString("title"),
-                "$effort · ${minutesFor(id)} min" + if (isNext) " · now" else "", true, isNext) {
-                SessionActivity.start(this, week, dayN, id)
+        if (allDone) {
+            val c = Ui.edgeCard(this)
+            c.addView(Ui.caps(this, "Today ✓"))
+            c.addView(t(d.optString("title"), 18f, Ui.ink, true), Ui.lp(this, 2))
+            c.addView(t(d.optString("byTheEnd").replace("By the end you can", "You can now"), 15f), Ui.lp(this, 6))
+            add(c, 14)
+            Lessons.allDays().firstOrNull { (w, dd) -> w > week || (w == week && dd.optInt("day") > dayN) }?.let { (_, nd) ->
+                val tc = Ui.card(this)
+                tc.addView(Ui.caps(this, "Tomorrow"))
+                tc.addView(t(nd.optString("title"), 17f, Ui.ink, true), Ui.lp(this, 2))
+                add(tc, 10)
             }
-        }), 6)
-
-        // Any time
-        add(Ui.caps(this, "Any time"), 20)
-        val say = progress.sayAgainItems().size
-        add(listCard(listOf(
-            listRow("⚡", Ui.teal, Ui.tealLight, "Quick reactions", "Oh! · That makes sense · 5 min", true) { SessionActivity.start(this, week, dayN, "reactions") },
-            listRow("↻", Ui.orangeDark, Ui.orangeLight, "Say them again", if (say == 0) "Nothing waiting right now" else "$say phrase${if (say == 1) "" else "s"} that keep coming back", true) {
-                SessionActivity.start(this, week, dayN, "sayagain") },
-            listRow("💬", Ui.blue, Ui.blueLight, "Free chat", "Talk about anything · no score", true) { startActivity(Intent(this, MainActivity::class.java)) }
-        )), 6)
-    }
-
-    private fun continueTitle(d: JSONObject, s: JSONObject): String {
-        if (s.optString("id") == "learn") {
-            val steps = s.optJSONArray("steps")
-            val model = steps?.let { a -> (0 until a.length()).map { a.getJSONObject(it) }.firstOrNull { it.optString("type") == "model" } }
-            val line = model?.optJSONArray("lines")?.optString(0)
-            val topic = d.optString("title").substringAfter(": ").substringBefore(" and ").replaceFirstChar { it.uppercase() }
-            return if (!line.isNullOrBlank() && line.length < 40) "$topic: “$line”" else topic
+            add(practiceCard(1f, "Full day done!"), 10)
+            anyTime(week, dayN, "Want more?")
+            return
         }
-        return if (s.optString("id") == "free") "Free chat + review recording" else s.optString("title")
-    }
-
-    private fun stageLine(week: Int, day: Int, s: JSONObject): String {
-        val n = s.optJSONArray("steps")?.length() ?: 1
-        val pos = progress.pos(week, day, s.optString("id"))
-        if (s.optString("id") == "learn") {
-            val stage = when { pos <= 0 -> 1; pos <= 1 -> 2; else -> 3 }
-            return "Stage $stage of 3: " + listOf("listen", "understand it", "practise")[stage - 1]
+        // Today: the day overview
+        val today = Ui.card(this)
+        val hr = Ui.row(this)
+        hr.addView(Ui.caps(this, "Today"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        hr.addView(Ui.link(this, "Today's plan ›") { pages("plan") }.apply { minHeight = dp(32) })
+        today.addView(hr)
+        today.addView(t(d.optString("title"), 18f, Ui.ink, true))
+        today.addView(t(d.optString("overview"), 15f), Ui.lp(this, 8))
+        d.optString("byTheEnd").takeIf { it.isNotBlank() }?.let { today.addView(t(it, 14f, Ui.muted), Ui.lp(this, 8)) }
+        today.addView(chips(d.optJSONArray("phrases")), Ui.lp(this, 4))
+        if (dayN > 0) {
+            val sr = Ui.row(this)
+            sr.addView(t(if (progress.shortDay()) "Shorter day is on." else "Short on time?", 14f, Ui.muted))
+            sr.addView(Ui.link(this, if (progress.shortDay()) "Back to the full day" else "Do a shorter day") { progress.setShortDay(!progress.shortDay()); render() }.apply { minHeight = dp(36) })
+            today.addView(sr, Ui.lp(this, 4))
         }
-        return if (pos <= 0) "Not started yet" else "Step ${pos + 1} of $n"
+        add(today, 14)
+        // Continue: only what's next
+        val pos = progress.pos(week, dayN, next!!.optString("id"))
+        val cc = Ui.edgeCard(this)
+        cc.addView(Ui.caps(this, "Continue"))
+        val r = Ui.row(this)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(t(next.optString("title"), 17f, Ui.ink, true))
+        col.addView(t(if (pos > 0) "You stopped part-way" else "Not started", 13.5f, Ui.muted))
+        r.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        r.addView(Ui.smallButton(this, "Continue") { SessionActivity.start(this, week, dayN, next.optString("id")) })
+        cc.addView(r, Ui.lp(this, 4))
+        add(cc, 10)
+        val frac = if (sessions.isEmpty()) 0f else doneN.toFloat() / sessions.size
+        add(practiceCard(frac, when { doneN == 0 -> "Let's start!"; frac < 0.5f -> "A good start. Keep going!"; else -> "Nearly there!" }), 10)
+        anyTime(week, dayN)
     }
 
-    private fun betterThanYesterday(): String? {
-        val today = progress.today()
-        val tTurns = progress.countOn("turns", today); val yTurns = progress.countOn("turns", today - 1)
-        val tAgain = progress.countOn("againRequests", today); val yAgain = progress.countOn("againRequests", today - 1)
-        return when {
-            yTurns > 0 && tTurns > yTurns -> "Better than yesterday: ${tTurns - yTurns} more turns of talking"
-            yAgain > 0 && tTurns > 0 && tAgain < yAgain -> "Better than yesterday: ${yAgain - tAgain} fewer \"Again, please\""
-            else -> null
-        }
+    private fun practiceCard(frac: Float, msg: String): View {
+        val c = Ui.card(this)
+        val r = Ui.row(this)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(t("Today's practice", 15.5f, Ui.ink, true))
+        col.addView(t(msg, 13.5f, Ui.muted))
+        r.addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        r.addView(Ui.ring(this, frac), LinearLayout.LayoutParams(dp(52), dp(52)))
+        c.addView(r)
+        return c
     }
 
-    // ---------------------------------------------------------------- Progress (+ the course plan)
+    private fun pages(mode: String) = startActivity(Intent(this, PagesActivity::class.java).putExtra("mode", mode))
+
+    // ---------------------------------------------------------------- Progress (numbers live here only)
 
     private fun progressTab() {
         val cur = progress.currentDay()
         val week = cur?.first ?: 1
         add(t("My progress", 22f, Ui.ink, true), 0)
-        add(t("Week $week", 13f, Ui.muted), 2)
+        val talks = progress.list("talks")
+        val results = progress.list("results")
+        add(t(if (cur?.second?.optInt("day") == 0) "Day 0" else "Week $week", 13.5f, Ui.muted), 2)
+        if (talks.isEmpty() && results.isEmpty()) {
+            val c = Ui.card(this).apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(16), dp(26), dp(16), dp(26)) }
+            c.addView(Ui.ring(this, 0f), LinearLayout.LayoutParams(dp(60), dp(60)).apply { gravity = Gravity.CENTER_HORIZONTAL })
+            c.addView(t("Your numbers start after Day 1", 17f, Ui.ink, true).apply { gravity = Gravity.CENTER }, Ui.lp(this, 12))
+            c.addView(t("Your Day 0 talk is saved, so you can hear \"then vs now\" later.", 14f, Ui.muted).apply { gravity = Gravity.CENTER }, Ui.lp(this, 4))
+            add(c, 12)
+            add(listCard(listOf(listRow(null, 0, 0, "Course plan · 8 weeks", null, true) { pages("course") })), 10)
+            return
+        }
         val streak = progress.streak()
         val total = progress.totalMinutes()
-        val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = Ui.rounded(this@HomeActivity, Ui.tealDark, 16); setPadding(dp(16), dp(14), dp(16), dp(14)) }
+        val top = Ui.edgeCard(this)
         top.addView(t(if (streak >= 1) "Right on track. Keep going!" else "Welcome back! Let's start again today.", 17f, Ui.ink, true))
-        top.addView(t("$streak day${if (streak == 1) "" else "s"} in a row · ${total / 60} h ${total % 60} min practised", 13.5f, Ui.tealText), Ui.lp(this, 4))
+        top.addView(t("$streak day${if (streak == 1) "" else "s"} in a row · ${total / 60} h ${total % 60} min practised", 13.5f, Ui.muted), Ui.lp(this, 4))
         add(top, 12)
-
-        val results = progress.list("results")
-        val started = results.count { it.optBoolean("startedSelf") }
-        val follow = results.sumOf { it.optInt("followups") }
-        val firstFollow = results.firstOrNull()?.optInt("followups") ?: 0
+        fun tile(label: String, value: String, sub: String?): View {
+            val c = Ui.card(this).apply { setPadding(dp(14), dp(10), dp(14), dp(10)) }
+            c.addView(t(label, 13.5f, Ui.muted))
+            val r = Ui.row(this)
+            r.addView(t(value, 19f, Ui.ink, true))
+            if (sub != null) r.addView(t("  $sub", 13f, Ui.muted))
+            c.addView(r)
+            return c
+        }
+        fun pair(a: View, b: View) = Ui.row(this).apply {
+            addView(a, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply { marginStart = dp(8) })
+        }
+        val firstT = talks.firstOrNull(); val lastT = talks.lastOrNull()
+        val wpm = lastT?.optInt("wpm") ?: 0
+        val wpm0 = firstT?.optInt("wpm1") ?: 0
+        val pz = lastT?.optDouble("pausesPerMin") ?: 0.0
+        val pz0 = firstT?.optDouble("pauses1") ?: 0.0
         val longest = results.maxOfOrNull { it.optInt("longest") } ?: 0
-        val help = results.sumOf { it.optInt("help") } + progress.count("againRequests")
-        val coach = progress.list("coachLog").map { it.optString("si") }.distinct().size
-        val listenGood = progress.count("listenGood")
-        val today = progress.today()
-        val againToday = progress.countOn("againRequests", today); val againYest = progress.countOn("againRequests", today - 1)
-        add(Ui.caps(this, "This week you…"), 18)
-        fun tick(title: String, sub: String, on: Boolean) = listRow("✓", if (on) Ui.green else Ui.muted, if (on) Ui.greenLight else Ui.surface2, title, sub, false)
-        add(listCard(listOf(
-            tick("Started $started conversation${if (started == 1) "" else "s"} yourself", "This week", started > 0),
-            tick("Asked $follow follow-up question${if (follow == 1) "" else "s"}", if (results.size > 1) "Up from $firstFollow in your first chat" else "In your conversations", follow > 0),
-            tick("Spoke $longest words without stopping", "Your longest turn", longest > 0),
-            tick("Asked for help $help time${if (help == 1) "" else "s"}", "Good: you didn't go silent", help > 0),
-            tick("Learned $coach new word${if (coach == 1) "" else "s"} with the Sinhala button", "${progress.count("coachSaid")} now said in English", coach > 0),
-            tick("Answered $listenGood listening question${if (listenGood == 1) "" else "s"} well", "Listening", listenGood > 0),
-            tick("\"Again, please\": $againToday today", if (againYest > 0) "$againYest yesterday · fewer means you understand more" else "Asking is good; it falls as you understand more", true)
-        )), 6)
+        val mins = maxOf(1, progress.minutesToday())
+        val siNow = (progress.countOn("sinhalaUses", progress.today()) * 10f / mins).toInt()
+        val siFirst = run { val d = progress.firstDay(); val m = maxOf(1, progress.minutesOn(d)); (progress.countOn("sinhalaUses", d) * 10f / m).toInt() }
+        add(pair(tile("Words/min", if (wpm > 0) "$wpm" else "–", if (wpm0 > 0 && wpm != wpm0) "${if (wpm > wpm0) "↑" else "↓"} from $wpm0" else null),
+            tile("Long pauses", if (lastT != null) "%.0f/min".format(pz) else "–", if (firstT != null && pz != pz0) "${if (pz < pz0) "↓" else "↑"} from %.0f".format(pz0) else null)), 10)
+        add(pair(tile("Longest turn", if (longest > 0) "$longest words" else "–", null),
+            tile("Sinhala / 10 min", "$siNow", if (siFirst != siNow) "${if (siNow < siFirst) "↓" else "↑"} from $siFirst" else null)), 8)
 
         // Then vs now: his Day 0 voice next to today's
         val recs = VoiceRecorder.all(progress)
         val first = progress.getString("saveFile:baseline-talk")?.let { File(it) }?.takeIf { it.exists() } ?: recs.firstOrNull()?.let { File(it.optString("file")) }
         val last = recs.lastOrNull()?.let { File(it.optString("file")) }?.takeIf { it.exists() && it != first }
-        val play = t("Play", 14f, Ui.teal, true).apply {
-            gravity = Gravity.CENTER; setPadding(dp(14), dp(7), dp(14), dp(7))
-            background = Ui.rounded(this@HomeActivity, Ui.surface, 10, Ui.teal)
-            setOnClickListener {
-                Ui.tap(it)
-                if (first == null) { Ui.toast(this@HomeActivity, "Your Day 0 recording will play here."); return@setOnClickListener }
-                Ui.toast(this@HomeActivity, "Day 0…")
-                VoiceRecorder.play(first) { if (last != null) main.post { Ui.toast(this@HomeActivity, "…and now"); VoiceRecorder.play(last) } }
-            }
+        val play = Ui.smallButton(this, "▶ Play", false) {
+            if (first == null) { Ui.toast(this@HomeActivity, "Your Day 0 recording will play here."); return@smallButton }
+            Ui.toast(this@HomeActivity, "Day 0…")
+            VoiceRecorder.play(first) { if (last != null) main.post { Ui.toast(this@HomeActivity, "…and now"); VoiceRecorder.play(last) } }
         }
-        add(listCard(listOf(listRow("▷", Ui.teal, Ui.tealLight, "Then vs now", "Your Day 0 answer next to today's", false, right = play))), 12)
+        add(listCard(listOf(listRow(null, 0, 0, "Then vs now", "Day 0 next to today", false, right = play))), 10)
 
-        // Skills
+        // Skills (from his profile)
         add(Ui.caps(this, "Skills"), 18)
-        val answers = progress.list("answers")
-        val goodRatio = if (answers.isEmpty()) 0f else answers.count { it.optString("mark") == "good" }.toFloat() / answers.size
+        val eng = Memory.english(progress)
+        val strong = eng.optJSONArray("strong"); val working = eng.optJSONArray("working")
         fun badge(level: String) = when (level) {
             "Strong" -> Ui.chip(this, level, Ui.green, Ui.greenLight)
             "Getting better" -> Ui.chip(this, level, Ui.blue, Ui.blueLight)
             else -> Ui.chip(this, level, Ui.muted, Ui.surface2)
         }
-        val dayNow = cur?.second?.optInt("day") ?: 0
-        add(listCard(listOf(
-            listRow(null, 0, 0, "Responding", null, false, right = badge(when { answers.size < 3 -> "Starting"; goodRatio >= 0.6f -> "Strong"; else -> "Getting better" })),
-            listRow(null, 0, 0, "Starting conversations", null, false, right = badge(when { started >= 3 -> "Strong"; started >= 1 -> "Getting better"; else -> "Starting" })),
-            listRow(null, 0, 0, "Keeping it going", null, false, right = badge(when { follow >= 8 -> "Strong"; follow >= 1 -> "Getting better"; else -> "Starting" })),
-            listRow(null, 0, 0, "Telling a story", null, false, right = badge(if (dayNow < 5 && week == 1) "From Day 5" else if (longest >= 60) "Strong" else "Getting better"))
-        )), 6)
-
-        progress.getString("testScore:w1")?.let { add(listCard(listOf(listRow("◎", Ui.teal, Ui.tealLight, "Weekly test", "Week 1: $it / 100 (pass 70)", false))), 12) }
-        val say = progress.sayAgainItems().size
-        add(listCard(listOf(listRow("↻", Ui.orangeDark, Ui.orangeLight, "Say them again", "$say phrase${if (say == 1) "" else "s"} that keep coming back", true) {
-            SessionActivity.start(this, cur?.first ?: 1, dayNow, "sayagain") })), 12)
-
-        // The course plan (moved here from Home, mentor 11 Nov)
-        add(Ui.caps(this, "Week $week"), 22)
-        add(t("Later days are written from your results, so they fit you.", 12.5f, Ui.muted), 4)
-        add(listCard(Lessons.allDays().filter { it.first == week }.map { (_, dd) ->
-            val n = dd.optInt("day")
-            val done = progress.dayDone(week, dd)
-            val isCur = cur != null && n == dayNow
-            val locked = !done && !isCur
-            listRow(if (done) "✓" else if (isCur) "○" else "🔒", if (done) Ui.green else if (isCur) Ui.teal else Ui.muted,
-                if (done) Ui.greenLight else if (isCur) Ui.tealLight else Ui.surface2,
-                dd.optString("title").substringAfter(": "), if (n == 0) "Day 0" else "Day $n", isCur) {
-                if (locked) Ui.toast(this, "This day opens after the one before.") else { tab = 0; render() }
-            }
-        }), 6)
+        val rows = mutableListOf<View>()
+        if (strong != null) for (k in 0 until strong.length()) rows.add(listRow(null, 0, 0, strong.getString(k).replaceFirstChar { it.uppercase() }, null, false, right = badge("Strong")))
+        if (working != null) for (k in 0 until working.length()) rows.add(listRow(null, 0, 0, working.getString(k).replaceFirstChar { it.uppercase() }, null, false, right = badge("Getting better")))
+        if (rows.isEmpty()) {
+            rows.add(listRow(null, 0, 0, "Talking about myself", null, false, right = badge(if (talks.size >= 3) "Strong" else "Getting better")))
+            rows.add(listRow(null, 0, 0, "Asking back", null, false, right = badge(if (results.sumOf { it.optInt("followups") } >= 5) "Strong" else "Getting better")))
+            rows.add(listRow(null, 0, 0, "Telling what happened", null, false, right = badge("From week 3")))
+        }
+        add(listCard(rows), 6)
+        add(listCard(listOf(listRow(null, 0, 0, "Course plan · 8 weeks", null, true) { pages("course") })), 12)
     }
 
     // ---------------------------------------------------------------- Me
@@ -345,31 +323,27 @@ class HomeActivity : Activity() {
     private fun me() {
         val cur = progress.currentDay()
         val week = cur?.first ?: 1
+        val dayNow = cur?.second?.optInt("day") ?: 0
         add(t("Me", 22f, Ui.ink, true), 0)
-        add(t("Week $week", 13f, Ui.muted), 2)
-        add(listCard(listOf(listRow("◯", Ui.teal, Ui.tealLight, hisName() ?: "Your name", "Week $week · started ${progress.startedText()}", false))), 12)
-
-        val fav = progress.getString("save:favourites")
-        val words = progress.list("coachLog").distinctBy { it.optString("si") }
+        val nc = Ui.card(this)
+        nc.addView(t(hisName() ?: "Your name", 18f, if (hisName() == null) Ui.muted else Ui.ink, true))
+        nc.addView(t("Week $week · started ${progress.startedText()}", 13.5f, Ui.muted))
+        add(nc, 12)
         val due = progress.sayAgainItems().size
         val test = progress.getString("testScore:w$week")
-        val dayNow = cur?.second?.optInt("day") ?: 0
         add(listCard(listOf(
-            listRow("▤", Ui.teal, Ui.tealLight, "My Favourites", fav?.take(90)?.let { "$it · tell Sam or Maya to change" } ?: "Tell Maya about your favourite films on Day 0", false),
-            listRow("◫", Ui.teal, Ui.tealLight, "My Words", "${words.size} words and phrases · $due due today", true) { showWords(words) },
-            listRow("◎", Ui.teal, Ui.tealLight, "Weekly test", test?.let { "Week $week: $it / 100" } ?: if (dayNow >= 7) "Open today" else "Locked until Day 7", false)
+            listRow("◉", Ui.ink, Ui.surface2, "My profile", "My life · My English", true) { pages("profile") },
+            listRow("≡", Ui.ink, Ui.surface2, "My words and phrases", if (due == 0) "Nothing to practise right now" else "$due to practise today", true) { pages("words") },
+            if (dayNow >= 7 || test != null) listRow("◎", Ui.ink, Ui.surface2, "Weekly test", test?.let { "Week $week: done" } ?: "Open today", false)
+            else listRow("◎", Ui.muted, Ui.surface2, "Weekly test", "Opens on Day 7", false).apply { alpha = 0.6f }
         )), 12)
 
         // Report to mentor: the preview is the page itself
-        add(Ui.caps(this, "Report to mentor"), 20)
-        add(t("Your lesson progress for the week. Preview: this is what will be sent.", 12.5f, Ui.muted), 4)
+        add(Ui.caps(this, "Report to mentor (preview)"), 20)
         val rep = reportParts()
         add(listCard(rep.rows.map { (a, b) -> listRow(null, 0, 0, a, b, false) }), 6)
         add(Ui.button(this, "Send report on WhatsApp") { sendReport(rep) }, 12)
-
-        add(Ui.caps(this, "Problem or idea?"), 20)
-        add(listCard(listOf(listRow("📳", Ui.orangeDark, Ui.orangeLight, "Shake your phone, on any screen",
-            "Report a bug, a mistake in a lesson, or an idea to improve the app. It goes to your mentor on WhatsApp.", false) { shake.open() })), 6)
+        add(Ui.tip(this, "Problem or idea? Shake your phone on any screen."), 12)
 
         // Hidden test settings: tap the version 7 times (mentor only)
         add(t("Version ${BuildConfig.VERSION_NAME}", 12f, Ui.muted).apply {
@@ -379,6 +353,7 @@ class HomeActivity : Activity() {
                 if (versionTaps >= 7) { versionTaps = 0; startActivity(Intent(this@HomeActivity, MainActivity::class.java).putExtra("settingsOnly", true)) }
             }
         }, 18)
+        add(t("Sounds: Maya's laugh by lmbubec (CC0); Sam's laugh \"Short male snorts and giggles\" by pfranzen, CC BY 3.0, via Wikimedia Commons.", 11f, Ui.muted).apply { gravity = Gravity.CENTER }, 2)
     }
 
     private fun showWords(words: List<JSONObject>) {
@@ -400,11 +375,15 @@ class HomeActivity : Activity() {
         val freezes = progress.list("results").sumOf { it.optInt("stuck") }
         val lastComm = progress.list("results").lastOrNull { it.optString("communication").isNotBlank() }?.optString("communication")
         val recs = VoiceRecorder.all(progress).takeLast(2)
+        val mistakes = Memory.topMistakes(progress, 2)
+        val working = Memory.english(progress).optJSONArray("working")?.optString(0)
+        val changed = Memory.changedLines(progress)
         val rows = listOf(
             (if (doneDays >= planned) "On track" else "Behind by ${planned - doneDays} day${if (planned - doneDays == 1) "" else "s"}") to "Plan vs actual: $doneDays of $planned days done",
-            ("Main gap: " + (coach.lastOrNull()?.optString("en")?.take(40) ?: "not enough data yet")) to "Sinhala button: ${coach.map { it.optString("si") }.distinct().size} new words, $freezes times stuck",
-            "Next focus" to (lastComm?.take(90) ?: "Starting conversations"),
-            "${recs.size} recording${if (recs.size == 1) "" else "s"} for you to score" to "His latest review recordings (attached)"
+            ("Main gap: " + (working ?: mistakes.firstOrNull()?.substringBefore("→")?.trim()?.take(40) ?: "not enough data yet")) to
+                (mistakes.firstOrNull()?.let { "\"${it.take(80)}\" keeps coming back" } ?: "Sinhala button: ${coach.map { it.optString("si") }.distinct().size} new words, $freezes times stuck"),
+            "Next focus" to (changed.lastOrNull()?.take(100) ?: lastComm?.take(90) ?: "Asking back in conversations"),
+            "${recs.size} recording${if (recs.size == 1) "" else "s"} for you" to "His latest talks (attached)"
         )
         val scores = progress.list("results").filter { it.optInt("score", -1) >= 0 }.takeLast(3)
         val sb = StringBuilder("Spoken English · progress report\n")
@@ -414,6 +393,11 @@ class HomeActivity : Activity() {
         sb.append("Conversations: ${progress.count("conversations")} · turns: ${progress.count("turns")} · drill answers: ${progress.count("answers")} (good ${progress.count("good")})\n")
         if (scores.isNotEmpty()) sb.append("Conversation scores (for you only): " + scores.joinToString(", ") { "${it.optInt("score")}" } + "\n")
         progress.getString("testScore:w1")?.let { sb.append("Weekly test: $it / 100\n") }
+        if (changed.isNotEmpty()) { sb.append("\nWhat the app changed and why:\n"); changed.forEach { sb.append("• $it\n") } }
+        val sums = Memory.summaries(progress).takeLast(3)
+        if (sums.isNotEmpty()) { sb.append("\nLatest conversations:\n"); sums.forEach { sb.append("— ${it.optString("title")} (with ${it.optString("who")}):\n${it.optString("summary")}\n") } }
+        val prof = Memory.life(progress).takeLast(12)
+        if (prof.isNotEmpty()) { sb.append("\nWhat Sam and Maya know about him:\n"); prof.forEach { sb.append("• ${it.optString("fact")}\n") } }
         return Report(rows, sb.toString(), recs.map { File(it.optString("file")) }.filter { it.exists() })
     }
 

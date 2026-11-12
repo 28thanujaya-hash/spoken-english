@@ -64,7 +64,7 @@ object Ai {
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put("generationConfig", JSONObject().put("responseMimeType", "application/json")
-                .put("temperature", 0.4).put("maxOutputTokens", 1500))
+                .put("temperature", 0.4).put("maxOutputTokens", 3000))
         val url = URL("https://generativelanguage.googleapis.com/v1beta/models/" +
             URLEncoder.encode(model, "UTF-8") + ":generateContent")
         val con = url.openConnection() as HttpURLConnection

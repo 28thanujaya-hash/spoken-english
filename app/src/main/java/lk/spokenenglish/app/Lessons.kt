@@ -98,10 +98,12 @@ class Progress(private val ctx: Context) {
             .remove("pos:" + key(week, day, session)).apply()
     }
 
-    /** Sessions shown for a day: on a 45-minute day, Listen and react is skipped (QA 11 Nov). */
+    /** Parts shown for a day: a shorter day keeps Shadowing, 3-2-1 talk and the conversation (fresh plan). */
     fun sessionsFor(d: JSONObject): List<JSONObject> {
         val all = Lessons.sessions(d)
-        return if (shortDay()) all.filter { it.optString("id") != "listen" } else all
+        if (!shortDay()) return all
+        val keep = all.filter { it.optBoolean("short", false) }
+        return keep.ifEmpty { all.filter { it.optString("id") != "listen" } }
     }
 
     fun dayDone(week: Int, d: JSONObject) = sessionsFor(d).all { isDone(week, d.optInt("day"), it.optString("id")) }
@@ -161,6 +163,7 @@ class Progress(private val ctx: Context) {
     fun addFacts(who: String, new: List<String>) {
         val all = (facts(who) + new.map { it.trim() }.filter { it.length in 3..140 }).distinctBy { it.lowercase() }.takeLast(12)
         p.edit().putString("facts:$who", JSONArray(all).toString()).apply()
+        Memory.addFacts(this, new, "chat with $who")
     }
 
     // ---- "Say them again": one list and one count everywhere ----
@@ -177,7 +180,17 @@ class Progress(private val ctx: Context) {
         p.edit().putStringSet("sayDone", (p.getStringSet("sayDone", emptySet()) ?: emptySet()) + sentence).apply()
     }
 
+    /** The fresh plan (lessons v3, mentor 12 Nov) starts again at Day 0: old ticks and positions go, everything else stays. */
+    fun freshStartIfNeeded(lessonsVersion: Int) {
+        if (lessonsVersion < 3 || p.getBoolean("fresh3", false)) return
+        val e = p.edit()
+        p.all.keys.filter { it.startsWith("done:") || it.startsWith("pos:") }.forEach { e.remove(it) }
+        e.putBoolean("fresh3", true).apply()
+    }
+
     fun putString(k: String, v: String) = p.edit().putString(k, v).apply()
+    fun putLong(k: String, v: Long) = p.edit().putLong(k, v).apply()
+    fun getLong(k: String): Long = p.getLong(k, 0L)
     fun getString(k: String): String? = p.getString(k, null)
     fun seenLessons() = p.getInt("seenLessons", 0)
     fun setSeenLessons(v: Int) = p.edit().putInt("seenLessons", v).apply()
