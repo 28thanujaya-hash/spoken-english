@@ -30,6 +30,8 @@ android {
 
     // Paradee voice: misaki-g2p + our bridge (app/src/main/cpp). ONNX Runtime itself is downloaded, not built in.
     ndkVersion = "27.2.12479018"
+    // Keep the native library compressed inside the APK: every update is a full APK download.
+    packaging { jniLibs { useLegacyPackaging = true } }
     externalNativeBuild {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
