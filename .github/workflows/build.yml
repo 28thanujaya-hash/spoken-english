@@ -2,6 +2,8 @@ name: Build test APK
 
 on:
   push:
+    # training work (Kaggle jobs, results, voice pack) doesn't change the app: no new build, no phone update
+    paths-ignore: ['kaggle/**', 'results/**', 'voicepack/**', '.github/workflows/kaggle.yml', '.github/workflows/voice-pack.yml', '**.md']
   workflow_dispatch:
 
 jobs:
