@@ -24,6 +24,14 @@ android {
         val reports = System.getenv("REPORTS_TOKEN") ?: ""
         buildConfigField("String", "REPORTS_TOKEN", "\"$reports\"")
         buildConfigField("String", "REPORTS_REPO", "\"28thanujaya-hash/spoken-english\"")
+        // The student's A34 and the mentor's X9c are both 64-bit ARM; only that is built (keeps the APK small).
+        ndk { abiFilters += listOf("arm64-v8a") }
+    }
+
+    // Paradee voice: misaki-g2p + our bridge (app/src/main/cpp). ONNX Runtime itself is downloaded, not built in.
+    ndkVersion = "27.2.12479018"
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
 
     signingConfigs {

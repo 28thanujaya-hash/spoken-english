@@ -1,0 +1,1 @@
+C API headers from com.microsoft.onnxruntime:onnxruntime-android:1.31.1 (MIT). The library itself is downloaded at run time, not in the APK.

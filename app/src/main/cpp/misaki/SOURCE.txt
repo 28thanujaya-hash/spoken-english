@@ -1,0 +1,1 @@
+misaki-g2p from github.com/elizaOS/llama.cpp tools/misaki-g2p, branch eliza/develop-pin-ea8b3f2, commit d05d7af2faf9d70edadcb8bdd66f1f4ccf597831. Unchanged. Built without eSpeak (no GPL code).

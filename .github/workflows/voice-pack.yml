@@ -1,0 +1,33 @@
+name: Voice pack
+# Publishes the voice files the app downloads outside the APK, as a release of the public updates repo.
+# The release is never marked "latest", so the app updater (releases/latest) keeps seeing only app builds.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['voicepack/**', '.github/workflows/voice-pack.yml']
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and check the pack
+        run: python voicepack/make_pack.py pack
+      - name: Publish (replaces the files of the same pack)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          R=28thanujaya-hash/spoken-english-updates
+          TAG=$(python -c "import json;print(json.load(open('pack/voice.json'))['version'])")
+          cd pack
+          if gh release view "$TAG" -R $R >/dev/null 2>&1; then
+            gh release upload "$TAG" voice.json *.gz -R $R --clobber
+          else
+            gh release create "$TAG" voice.json *.gz -R $R --latest=false \
+              --title "Voice pack $TAG (not an app update)" \
+              --notes "Voice files the app downloads outside the APK. $(python -c "import json;print(json.load(open('voice.json'))['note'])")"
+          fi
+          gh api repos/$R/releases/latest --jq '"latest is still " + .tag_name'

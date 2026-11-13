@@ -37,6 +37,7 @@
         <activity android:name=".SessionActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".MainActivity" android:exported="false" android:screenOrientation="portrait" />
         <activity android:name=".PagesActivity" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".VoiceTestActivity" android:exported="false" android:screenOrientation="portrait" />
         <receiver android:name=".UpdateReceiver" android:exported="false" />
         <!-- Lets the mentor report attach his review recordings (only when he taps Send report). -->
         <provider

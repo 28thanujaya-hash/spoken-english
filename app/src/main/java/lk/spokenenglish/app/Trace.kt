@@ -136,6 +136,14 @@ object Trace {
         uploadPending()
     }
 
+    /** Sends a short text (e.g. voice test results) as its own GitHub Issue; waits on the phone if offline. */
+    fun sendText(title: String, body: String) {
+        if (!ready) return
+        val dir = File(app.filesDir, "reports").apply { mkdirs() }
+        runCatching { File(dir, "r-${System.currentTimeMillis()}.txt").writeText(title.take(120) + "\n" + body) }
+        uploadPending()
+    }
+
     /** Sends every waiting report as a GitHub Issue (long ones split into comments). */
     fun uploadPending() {
         if (!ready || uploading) return

@@ -842,6 +842,9 @@ class MainActivity : Activity() {
         val service = SpeechLoop.googleService(this)?.packageName ?: "phone default (Google not found)"
         box.addView(label("Speech recognition: $service", 12f, Ui.muted).apply { setPadding(0, dp(4), 0, 0) })
         box.addView(label("Voices: Sam = ${voice.voiceName(Characters.SAM)} · Maya = ${voice.voiceName(Characters.MAYA)}", 12f, Ui.muted))
+        box.addView(Ui.button(this, "Paradee voice test (run 0)", outline = true) {
+            startActivity(android.content.Intent(this, VoiceTestActivity::class.java))
+        }, Ui.lp(this, 10))
         box.addView(label("App version ${BuildConfig.VERSION_NAME}", 12f, Ui.muted))
         box.addView(label("Updates: ${prefs.getString("updateLast", "not checked yet")}", 12f, Ui.muted))
         updater.check(force = true)
