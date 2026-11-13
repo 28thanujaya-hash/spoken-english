@@ -39,7 +39,7 @@ object VoicePack {
     }
 
     /** Blocking; run on a background thread. progress(text) is called often. Returns null on success, else the problem. */
-    fun download(c: Context, progress: (String) -> Unit): String? = try {
+    fun download(c: Context, progress: (String) -> Unit): String? { try {
         progress("Checking the list of voice files…")
         val m = JSONObject(get(MANIFEST))
         val files = m.getJSONArray("files")
@@ -74,10 +74,10 @@ object VoicePack {
         val names = (0 until files.length()).joinToString(",") { files.getJSONObject(it).getString("name") }
         p.edit().putString("files", names).putString("pack", m.optString("version", PACK)).apply()
         progress("Voice files ready ✓")
-        null
+        return null
     } catch (e: Exception) {
-        "download stopped: ${e.message ?: e.javaClass.simpleName} (tap again to continue where it stopped)"
-    }
+        return "download stopped: ${e.message ?: e.javaClass.simpleName} (tap again to continue where it stopped)"
+    } }
 
     private fun mb(b: Long) = "%.1f MB".format(b / 1_048_576.0)
 
