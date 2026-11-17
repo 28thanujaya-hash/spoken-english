@@ -1,1 +1,0 @@
-thusharajayawardane/se-voice-demo has status "KernelWorkerStatus.COMPLETE"
